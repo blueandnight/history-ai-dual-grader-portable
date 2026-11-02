@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>使用帮助 · 历史学科 AI 双评阅卷系统</title>
+  <style>
+    body{max-width:850px;margin:auto;padding:24px;font:16px/1.8 system-ui,"Microsoft YaHei",sans-serif;color:#17202a;background:#f5f7fb}
+    section{background:white;border:1px solid #dce3ec;border-radius:12px;padding:18px 22px;margin:18px 0}
+    h1{font-size:26px}h2{font-size:20px}a{color:#2355a2}li{margin:8px 0}code{overflow-wrap:anywhere}
+    @media(max-width:480px){body{padding:14px}section{padding:14px}h1{font-size:22px}}
+  </style>
+</head>
+<body>
+  <a href="/">返回阅卷工作台</a>
+  <h1>历史学科 AI 双评阅卷系统 · 使用帮助</h1>
+  <p>这份帮助随程序提供，无需外部网站。系统提供监督式双评建议，正式成绩仍需教师逐点终评。</p>
+  <section><h2>从新建考试到开始批改</h2><ol>
+    <li>在「新建考试」导入 DOCX 或 PDF。先核对客观题、主观题、设问、参考答案与分值，再确认保存。导入草稿不是已经验收的评分细则。</li>
+    <li>核对每道小题的评分点和满分。候选评分点池允许超过题目满分，实际得分按题目满分封顶；不要为了通过检查擅自改评分标准。</li>
+    <li>正式考试使用 PDF 版式时，先保存与当前试卷匹配的答题区模板，再从对应考试开始批改。</li>
+    <li>配置 AI-A / AI-B 后上传照片。正式布局路径先自动对齐、裁切，由教师逐张确认裁切，再单独检查隐私预览并批准外发。</li>
+    <li>系统批改后，对照原图、双模型评分及证据完成教师终评。</li>
+  </ol></section>
+  <section><h2>答题区或隐私检查没有通过</h2>
+    <p>出现 <code>answer_region_unavailable</code> 时，先检查当前考试、PDF、答题区模板是否匹配，以及照片是否能正确对齐。不要用伪造裁切角色或整页替代来绕过检查。</p>
+    <p>裁切不能缺关键手写、混入无关题目。图片中姓名、学号、身份码等信息需要在隐私预览中处理。接受裁切不等于批准隐私外发。</p>
+    <p>对齐失败或照片本身拍摄缺失时，应重新拍摄或按现有异常流程处理；不要反复触发模型调用。无正式布局的旧快速匿名路径保留兼容行为。</p>
+  </section>
+  <section><h2>怎样看双评分数与风险</h2>
+    <p>批次表并列显示两模型总分和分题差异，分母使用本次评分范围。某模型缺结果时显示「—」，不表示零分或与另一模型一致。</p>
+    <p>相同总分也可能对应不同评分点。HIGH 用于优先复核，不等于自动判错；LOW 或无冲突也不能替代教师核对，LOW 自动放行仍关闭。</p>
+    <p>学生确实手写抄录材料仍属于学生作答；不能只因与材料相似就判为印刷污染。模型仍可能误归属材料、补足学生未表达的信息或误读字迹。</p>
+  </section>
+  <section><h2>教师终评与导出</h2>
+    <p>逐点评为给分或不给分；存在不确定或缺失判断时不能确认。最终总分由服务端按 rubric 确定性计算，不能用手填总分覆盖逐点结果。</p>
+    <p>历史与导出可查看已有结果。无需身份码。两侧成绩可独立导出；整卷总分只合并已可靠关联的有效成绩。</p>
+  </section>
+  <section><h2>本机、手机与线上</h2>
+    <p>手机通过当前电脑生成的访问入口使用已配置能力，不能修改电脑 Key。线上 admin / teacher 使用当前密码登录契约，教师不要求邮箱、不触发登录 OTP。</p>
+    <p>便携版升级前先关闭旧进程并备份，不要把新程序直接覆盖唯一数据副本。使用「服务管理」安全退出；旧程序遇到更高 schema 数据库会拒绝打开，应改用匹配的新程序。</p>
+    <p>API Key、数据库、学生照片和诊断原文不要放进共享发行包。报告问题时先说明考试、批次、错误码和使用版本，不要直接发送密码或 Key。</p>
+  </section>
+</body>
+</html>

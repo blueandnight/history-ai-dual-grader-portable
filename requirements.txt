@@ -1,0 +1,5 @@
+Pillow>=10.0
+argon2-cffi>=23.1,<26
+pypdf>=6,<7
+pypdfium2==5.14.0
+-r objective-requirements.txt

@@ -1,0 +1,40 @@
+const {chromium}=require('playwright');
+const assert=require('node:assert/strict');
+(async()=>{
+ const [base,assignment,exam,pending,out,width]=process.argv.slice(2);
+ const browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});
+ const page=await browser.newPage({viewport:{width:Number(width),height:1000}});
+ const errors=[];page.on('pageerror',e=>errors.push(String(e)));
+ await page.route('**/*',r=>new URL(r.request().url()).origin===base?r.continue():r.abort());
+ try{
+  await page.goto(base+'/next/#/history?assignment='+assignment+'&exam='+exam);
+  let root=page.getByRole('region',{name:'双评成绩与批量采纳'});
+  await root.getByRole('button',{name:'处理待复核答卷（1份）'}).waitFor();
+  const save=root.getByRole('button',{name:'批量采纳所选 1 份'});
+  assert(await save.isDisabled());
+  await root.getByRole('checkbox',{name:'我已核对所选答卷及共识状态，确认将 AI 共识采纳为本次成绩；知悉未逐点评阅及共同误判风险'}).check();
+  assert(await save.isEnabled());
+  const select=root.getByRole('checkbox',{name:/^采纳 /});await select.uncheck();
+  assert(await root.getByRole('button',{name:'批量采纳所选 0 份'}).isDisabled());
+  await select.check();
+  await root.getByRole('checkbox',{name:'我已核对所选答卷及共识状态，确认将 AI 共识采纳为本次成绩；知悉未逐点评阅及共同误判风险'}).check();
+  const subs=root.getByRole('group',{name:'小题双评对照'});
+  assert(await subs.first().isVisible());
+  assert.equal(await root.locator('table table').count(),0);
+  assert((await subs.first().innerText()).includes(' · '));
+  await page.screenshot({path:out+'-before.png',fullPage:true});
+  await save.click();
+  await root.locator('.saved-score').filter({hasText:'共识采纳'}).waitFor();
+  await page.reload();root=page.getByRole('region',{name:'双评成绩与批量采纳'});
+  await root.locator('.saved-score').filter({hasText:'共识采纳'}).waitFor();
+  const exported=await page.evaluate(async id=>{const r=await fetch('/api/export-anonymous.csv?assignment_id='+id);return {status:r.status,text:await r.text()}},assignment);
+  assert.equal(exported.status,200);assert(exported.text.includes('批量采纳 AI 共识（未逐点评阅）'));
+  await root.getByRole('button',{name:'处理待复核答卷（1份）'}).click();
+  const review=page.getByRole('region',{name:'教师逐点终评',exact:true});await review.getByRole('heading',{name:'原图与人工复核',exact:true}).waitFor();
+  await page.waitForFunction(id=>document.querySelector('section.teacher-review')?.textContent.includes(id.slice(0,6))||document.querySelector('section.teacher-review .point-record'),pending);
+  assert.deepEqual(errors,[]);
+  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+  await page.screenshot({path:out+'-review.png',fullPage:true});
+  console.log('PASS '+width+'px: fixed model columns, selection/consent, adopt one, reload, export provenance, review only conflict; models 0');
+ }finally{await browser.close();}
+})().catch(e=>{console.error(e);process.exitCode=1});

@@ -1,0 +1,97 @@
+const {chromium}=require('playwright');
+const assert=require('node:assert/strict');
+(async()=>{
+ const [base,assignment,exam,out,width,mode]=process.argv.slice(2);
+ const browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})}),page=await browser.newPage({viewport:{width:Number(width),height:950}}),errors=[],writes=[];
+ page.on('pageerror',e=>errors.push(String(e)));page.on('request',r=>{if(r.method()==='POST')writes.push(r.url())});
+ await page.route('**/*',r=>new URL(r.request().url()).origin===base?r.continue():r.abort());
+ async function openManager(){const button=page.getByRole('button',{name:'答卷管理与删除',exact:true});if(await button.getAttribute('aria-pressed')!=='true')await button.click()}
+ try{
+  if(mode==='tools'){
+   await page.goto(base+'/next/#/objective?assignment='+assignment+'&exam='+exam);
+   const tools=page.locator('[aria-label="阅卷操作"]');await tools.getByRole('button',{name:'答卷管理与删除',exact:true}).waitFor();
+   const objectiveTools=await tools.innerText();
+   assert.equal(await page.getByText('最近批次',{exact:true}).count(),0);
+   assert.equal(await page.getByRole('region',{name:'统一身份码核对'}).count(),0);
+   await openManager();await page.getByRole('region',{name:'答卷管理与批量删除'}).getByText('同份整卷',{exact:true}).waitFor();
+   assert.equal(await page.getByRole('region',{name:'答卷管理与批量删除'}).count(),1);
+   assert.equal(await page.getByRole('button',{name:/^删除所选/}).count(),0);
+   await tools.getByRole('link',{name:'上传答卷',exact:true}).click();
+   await page.locator('[aria-label="答卷类型"]').getByRole('link',{name:'主观题',exact:true}).click();
+   await page.locator('[aria-label="答卷类型"] a[aria-current=page]').filter({hasText:'主观题'}).waitFor();
+   assert.equal(await page.getByText('最近批次',{exact:true}).count(),0);
+   assert.equal(await tools.getByRole('link',{name:'任务进度',exact:true}).count(),1);
+   assert.equal(await tools.innerText(),objectiveTools);
+   await openManager();await page.getByRole('region',{name:'答卷管理与批量删除'}).getByText('同份整卷',{exact:true}).waitFor();
+   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+   await page.screenshot({path:out+'-shared-tools.png',fullPage:true});
+   await tools.getByRole('link',{name:'上传答卷',exact:true}).click();
+   await page.getByRole('link',{name:'身份与答卷关联',exact:true}).click();
+   const summary=page.locator('summary').filter({hasText:/^身份码核对与自动关联/});await summary.waitFor();
+   assert.equal(await summary.evaluate(s=>s.parentElement.open),false);
+   assert.equal(await page.getByRole('region',{name:'统一身份码核对'}).count(),0);
+   await summary.click();await page.getByRole('region',{name:'统一身份码核对'}).getByRole('button',{name:'刷新身份码',exact:true}).waitFor();
+   assert.equal(writes.length,0);assert.deepEqual(errors,[]);
+   console.log('PASS '+width+'px: shared top controls in both grading views, deletion hidden in management, optional identity panel collapsed; no writes or models');
+   return;
+  }
+  if(mode==='identity'){
+   await page.goto(base+'/next/#/objective?assignment='+assignment+'&exam='+exam);
+   await page.getByRole('link',{name:'身份与答卷关联',exact:true}).click();
+   const open=async()=>{const s=page.locator('summary').filter({hasText:/^身份码核对与自动关联/});if(!await s.evaluate(s=>s.parentElement.open))await s.click()};
+   await open();
+   let identity=page.getByRole('region',{name:'统一身份码核对'});
+   await identity.getByRole('button',{name:'清空本场阅卷数据',exact:true}).click();
+   const confirm=page.getByRole('region',{name:'清空阅卷数据确认'});
+   await confirm.getByText(/主观题 2 份、客观题 3 份/).waitFor();
+   await confirm.getByText(/当前这次正式阅卷记录/).waitFor();
+   assert.equal(await confirm.locator('input').count(),0);
+   let payload;
+   page.on('request',r=>{if(r.url().endsWith('/api/clear-grading-data'))payload=r.postDataJSON()});
+   await page.screenshot({path:out+'-identity-clear.png',fullPage:true});
+   await confirm.getByRole('button',{name:'确认清空阅卷数据',exact:true}).click();
+   await page.waitForResponse(r=>r.url().includes('/api/assignments')&&r.status()===200);
+   await page.locator('summary').filter({hasText:/^身份码核对与自动关联（0份待核对）$/}).waitFor();
+   await open();identity=page.getByRole('region',{name:'统一身份码核对'});
+   await identity.getByText('尚无答卷，先在本考试上传客观题和主观题。',{exact:true}).waitFor();
+   assert.equal(payload.assignment_id,assignment);assert.equal(payload.exam_id,exam);assert.equal(payload.confirmed,true);
+   assert.equal(writes.filter(u=>u.endsWith('/api/clear-grading-data')).length,1);
+   assert.equal(writes.filter(u=>u.endsWith('/api/delete-answers')).length,0);
+   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));assert.deepEqual(errors,[]);
+   console.log('PASS '+width+'px: identity-page clear shortcut, exact exam scope, one confirmation, identity list refreshed; models 0');
+   return;
+  }
+  await page.goto(base+'/next/#/history?assignment='+assignment+'&exam='+exam);
+  await openManager();
+  let panel=page.getByRole('region',{name:'答卷管理与批量删除'});
+  await panel.getByText('同份整卷',{exact:true}).waitFor();
+  await panel.locator('tr').filter({hasText:'同份整卷'}).getByRole('checkbox').check();
+  await panel.getByRole('button',{name:'删除所选 1 组',exact:true}).click();
+  let confirm=page.getByRole('region',{name:'批量删除答卷确认'});
+  await confirm.getByText(/主观题 1 份、客观题 1 份、图片 2 张/).waitFor();
+  assert.equal(await confirm.locator('input').count(),0);
+  await page.screenshot({path:out+'-answer-delete.png',fullPage:true});
+  await confirm.getByRole('button',{name:'确认删除所选答卷',exact:true}).click();
+  await page.waitForResponse(r=>r.url().includes('/api/assignments')&&r.status()===200);
+  await openManager();
+  panel=page.getByRole('region',{name:'答卷管理与批量删除'});
+  await panel.getByText(/3 组/).waitFor();assert.equal(await panel.getByText('同份整卷',{exact:true}).count(),0);
+  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+  await page.goto(base+'/next/#/home');
+  await page.locator('[data-assignment-id="'+assignment+'"]').getByRole('button',{name:'清空阅卷数据',exact:true}).click();
+  confirm=page.getByRole('region',{name:'清空阅卷数据确认'});
+  await confirm.getByText(/主观题 1 份、客观题 2 份/).waitFor();
+  assert.equal(await confirm.locator('input').count(),0);
+  await page.screenshot({path:out+'-clear-preview.png',fullPage:true});
+  await confirm.getByRole('button',{name:'确认清空阅卷数据',exact:true}).click();
+  await page.getByText('本场阅卷数据已清空，考试配置和花名册保留，可立即重新上传',{exact:true}).waitFor();
+  await page.goto(base+'/next/#/history?assignment='+assignment+'&exam='+exam);
+  await openManager();
+  await page.getByText('没有答卷，可重新上传。',{exact:true}).waitFor();
+  assert.equal(writes.filter(u=>u.endsWith('/api/delete-answers')).length,1);
+  assert.equal(writes.filter(u=>u.endsWith('/api/clear-grading-data')).length,1);
+  assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));assert.deepEqual(errors,[]);
+  await page.screenshot({path:out+'-empty.png',fullPage:true});
+  console.log('PASS '+width+'px: actual group deletion + exam reset, one confirmation each, automatic refresh, retained exam/key, real models 0');
+ }finally{await browser.close()}
+})().catch(e=>{console.error(e);process.exit(1)});

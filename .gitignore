@@ -1,0 +1,46 @@
+# Runtime data and credentials
+/data/
+/config/
+/backups/
+/uploads/
+/upload_cache/
+/model-call-diagnostics/
+.env
+.env.*
+!/.env.example
+/.api-key*
+*.dpapi
+*.db
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+*.backup
+*.bak
+*.log
+
+# Reproducible build/development artifacts
+.venv/
+venv/
+node_modules/
+__pycache__/
+*.py[cod]
+*.tsbuildinfo
+/build/
+/dist/
+/便携版/
+/static/next/
+/frontend/dist/
+.cache/
+/tmp/
+/temp/
+/cache/
+playwright-report/
+test-results/
+# Local editor and private work files
+.vscode/
+.idea/
+.codex-work/
+*.tmp

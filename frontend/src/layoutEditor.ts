@@ -1,0 +1,10 @@
+import {request} from './api'
+export type BBox={x1:number;y1:number;x2:number;y2:number}
+export type LayoutRegion={question_id:string;page_number:number;region_type?:string;bbox:BBox}
+export type LayoutContext={exam_id:string;assignment_id:string;source_pdf_sha256:string;has_pdf_reference:boolean;pdf_hash_mismatch?:boolean;subjective_question_ids:string[];references:{page_number:number;reference_width:number;reference_height:number}[];layout_profile_id?:string;layout_profile?:{regions:LayoutRegion[]}|null;configured_count?:number;required_count?:number;status?:string}
+export function validBox(b:BBox){return Object.values(b).every(Number.isFinite)&&b.x1>=0&&b.y1>=0&&b.x2<=1&&b.y2<=1&&b.x2>b.x1&&b.y2>b.y1}
+export function normalizedPoint(x:number,y:number,bounds:{left:number;top:number;width:number;height:number}){if(bounds.width<=0||bounds.height<=0)throw new Error('页面尚未加载');return {x:Math.max(0,Math.min(1,(x-bounds.left)/bounds.width)),y:Math.max(0,Math.min(1,(y-bounds.top)/bounds.height))}}
+export function dragBox(a:{x:number;y:number},b:{x:number;y:number}):BBox{return {x1:Math.min(a.x,b.x),y1:Math.min(a.y,b.y),x2:Math.max(a.x,b.x),y2:Math.max(a.y,b.y)}}
+export function referenceUrl(exam:string,page:number){if(!/^[a-f0-9]{32}$/.test(exam)||!Number.isInteger(page)||page<1)throw new Error('参考页参数无效');return `/api/exam-layout-reference?exam_id=${exam}&page_number=${page}`}
+export function loadLayout(exam:string){if(!/^[a-f0-9]{32}$/.test(exam))throw new Error('请选择正式考试');return request<LayoutContext>('/api/exam-layout-profile?exam_id='+exam)}
+export function saveLayout(c:LayoutContext,regions:LayoutRegion[],confirmed:boolean){if(!confirmed||!c.has_pdf_reference||c.pdf_hash_mismatch)throw new Error('请确认PDF来源和答题区');const seen=new Set<string>();for(const r of regions){if(!c.subjective_question_ids.includes(r.question_id)||!c.references.some(p=>p.page_number===r.page_number)||!validBox(r.bbox)||seen.has(r.question_id))throw new Error('存在未知/重复题号、错页或无效答题框');seen.add(r.question_id)}return request<LayoutContext>('/api/exam-layout-profile','POST',{exam_id:c.exam_id,regions})}

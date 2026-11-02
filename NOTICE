@@ -1,0 +1,26 @@
+History AI Dual Grader — Windows Portable Edition
+
+Project-specific copyrightable contributions are copyright 2026 their
+respective contributing rightsholders. The project is initiated, designed,
+and maintained by its project maintainer.
+
+The Apache License, Version 2.0 applies to project content only to the extent
+the maintainer and contributing rightsholders are entitled to license it.
+This notice does not assert exclusive ownership of every line, copyright in
+uncopyrightable AI-generated material, or ownership of third-party works.
+
+AI-assisted development
+Substantial portions of code were generated, modified, debugged and tested
+with AI programming tools including Codex and DeepSeek. This is not a claim
+that all code was independently handwritten. AI tools and their providers
+are not listed as project copyright owners or licensors. Tool names describe
+the development process and do not imply endorsement or sponsorship.
+
+Third-party code, binary libraries, OCR models and other resources retain
+their own notices and license terms; see THIRD_PARTY_NOTICES.md and
+third_party/licenses/. Those terms are not replaced by the project license.
+Uploaded exams, student work, personal data, model-provider services and
+credentials are not covered by this project's source-code license.
+
+The four existing prompt templates are retained unchanged. No prompt-specific
+text, copyright attribution or other rights statement has been rewritten.

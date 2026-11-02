@@ -1,0 +1,11 @@
+{
+  "scope": "Windows portable source",
+  "private_history_included": false,
+  "user_data_included": false,
+  "project_license": "Apache-2.0 for authorized project content; third-party licenses retained",
+  "formal_prompt": "unchanged",
+  "ai_assisted_development": true,
+  "public_release_authorized": true,
+  "release_version": "v0.2.2-beta.1",
+  "source_kind": "independent sanitized Windows portable source snapshot"
+}

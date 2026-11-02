@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN" data-objective-base="__OBJECTIVE_BASE__">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f3f6fc">
+  <title>客观题快速匿名批改</title>
+  <link rel="stylesheet" href="__OBJECTIVE_BASE__/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div><span class="eyebrow">快速匿名批改</span><h1>客观题批改</h1><p class="subtitle">拍照上传答卷；视觉双评识别作答选项，服务器按标准答案确定性计分。</p></div>
+    <a class="material-entry" href="/next/#/history" id="workbench-entry">终评与成绩</a>
+  </header>
+  <main>
+    <section class="notice"><strong>拍照上传后双模型独立识别</strong><span id="runtime-status">检查视觉模型配置…</span><span>DeepSeek 与 MiMo 分别读取学生选项；只有两边判断一致时才自动按答案键计分。识别不清或意见不同会进入人工复核。答卷照片会发送给配置的模型服务。</span></section>
+
+    <section class="panel" id="setup-panel">
+      <h2>1. 选择正式考试或录入独立答案键</h2>
+      <label class="field">主线正式考试<select id="source-exam"><option value="">独立客观题（保留原方式）</option></select></label><button id="refresh-source-exams" class="quiet">刷新正式考试</button>
+      <p id="source-status" role="status"></p><details><summary>查看已确认题目、答案与分值（只读）</summary><div id="source-preview"></div></details><button id="use-source-exam" class="primary" hidden disabled>使用已确认考试生成或复用只读快照</button>
+      <fieldset id="independent-key"><legend>独立客观题答案键</legend>
+      <label class="field">答卷名称<input id="assessment-title" value="合成客观题演示"></label>
+      <div class="inline-fields"><label class="field">题数<input id="question-count" type="number" min="1" max="100" value="20"></label><button class="quiet" id="build-key">生成答案行</button></div>
+      <div id="answer-key" class="answer-key"></div>
+      <button class="primary" id="save-key">保存答案键</button>
+      </fieldset><p id="assessment-state" class="status" aria-live="polite">尚未保存答案键</p>
+    </section>
+
+    <section class="panel" id="upload-panel">
+      <h2>2. 拍照上传答卷</h2>
+      <div class="two-fields">
+        <label class="field">批改方式<select id="mode"><option value="" disabled selected>请选择批改方式</option><option value="vision">视觉模型双评 · 推荐</option><option value="omr">本地 OMR · 已确认模板</option><option value="handwriting">实验性手写 ABCD · RapidOCR（不作高可靠自动批改）</option></select></label>
+        <label class="field" id="template-wrap">OMR版式<select id="template"></select></label>
+      </div>
+      <label class="field privacy-field" id="privacy-wrap">答卷隐私确认
+        <select id="privacy-status">
+          <option value="unchecked">尚未确认（不能开始云端批改）</option>
+          <option value="pre_anonymized">导入前已避开身份信息</option>
+          <option value="redacted">姓名、学校等身份字段已遮挡</option>
+          <option value="no_identity_visible">我已检查，图片中没有可辨认身份信息</option>
+        </select>
+      </label>
+      <p class="muted" id="vision-note">照片会发送给所选模型服务；每份答卷调用两个模型各一次，手动重试会再次调用并可能产生费用。模型只识别题号与学生选项，得分按已保存的标准答案确定性计算。</p>
+      <fieldset class="grouping"><legend>图片分组</legend>
+        <label><input type="radio" name="grouping" value="one_per_image" checked> 默认：每张图片各自成为一份答卷</label>
+        <label><input type="radio" name="grouping" value="multi_page_all"> 多页模式：所选图片合并为同一份答卷</label>
+      </fieldset>
+      <label class="upload-box" for="files"><span class="upload-icon">＋</span><strong>拍摄或选择学生答卷照片</strong><span>请上传含实际作答标记的页面；支持多选，默认每张图片为一份答卷，也可合并多页</span><input id="files" type="file" accept="image/*" capture="environment" multiple></label>
+      <p id="file-count" class="muted">尚未选择照片</p><p class="muted">单页批量会按图片大小自动分组接收，保持原图清晰度；多页同一份答卷不会被拆开。每次最多100张、每张最多12 MiB。</p>
+      <button class="primary" id="upload" disabled>上传并开始批改</button>
+      <button id="stop-uploads" class="quiet" disabled>停止后续上传</button><p id="upload-stop-note" class="muted">停止后不再提交剩余组；已接收的任务会继续处理，不撤回已发出的模型请求。</p>
+      <div id="progress" class="progress hidden" aria-live="polite"></div><p id="task-error" role="alert"></p>
+    </section>
+
+    <details class="panel"><summary>高级管理：本次任务与历史任务</summary>
+    <section id="tasks-panel" aria-label="客观题任务管理">
+      <div class="section-title"><h2>本次任务与历史任务</h2><div><button id="refresh-tasks" class="quiet">刷新任务与结果</button><button id="delete-current-task" class="danger" disabled>删除本次任务</button></div></div>
+      <p id="task-current" role="status">选择考试或答案键后查看任务。刷新页面可恢复已接收任务的跟踪，不会自动重传照片或重试评分。</p>
+      <details><summary>查看最近任务（最多100组）</summary><div class="job-delete-actions"><button id="task-select-ended" class="quiet">选择已结束任务</button><button id="task-select-clear" class="quiet">清空选择</button><span id="task-selection-count" role="status">已选择0个任务</span><button id="jobs-delete-open" class="danger" disabled>预览删除所选任务</button></div><div id="task-list"></div></details>
+      <p id="task-delete-message" role="status"></p>
+      <section id="job-delete-panel" class="job-delete" aria-label="删除客观题任务确认" hidden tabindex="-1">
+        <h3>永久删除本次客观题任务</h3><p id="job-delete-preview" role="status"></p>
+        <p>将删除这一任务的客观答卷、图片、分数、复核记录及主客观关联，不可撤销。考试、答案键、主观题、其他任务、既有备份和审计记录保留。尚未上传的照片选择不在删除范围内。</p>
+        <p id="job-delete-error" role="alert"></p>
+        <label><input id="job-delete-consent" type="checkbox">我确认永久删除上述客观题任务及其成绩和图片。</label>
+        <div class="job-delete-actions"><button id="job-delete-submit" class="danger" disabled>永久删除该客观题任务</button><button id="job-delete-reload" class="quiet">重新读取删除范围</button><button id="job-delete-close" class="quiet">取消</button></div>
+      </section>
+      <section id="jobs-delete-panel" class="job-delete" aria-label="批量删除客观题任务确认" hidden tabindex="-1"><h3>永久删除所选客观题任务</h3><p id="jobs-delete-preview" role="status"></p><p>只删除所选任务的客观题答卷、图片、成绩、复核及对应关联。共享答案键、考试配置、未选任务、无关主观题、备份与审计记录保留。此操作不可撤销。</p><p id="jobs-delete-error" role="alert"></p><label><input id="jobs-delete-consent" type="checkbox">我确认永久删除上述所选客观题任务及其成绩和图片。</label><div class="job-delete-actions"><button id="jobs-delete-submit" class="danger" disabled>永久删除所选客观题任务</button><button id="jobs-delete-reload" class="quiet">重新读取整批删除范围</button><button id="jobs-delete-close" class="quiet">取消批量删除</button></div></section>
+      <label class="field">结果范围<select id="result-scope"><option value="exam">本考试全部答卷（默认）</option><option value="assessment">当前答案键全部答卷（高级）</option><option value="job">当前任务（高级）</option></select></label>
+      <p class="muted">历史任务按接收的上传组记录。待复核不会阻止下一组上传；未提交照片仅保留在当前浏览器，刷新前请先处理。</p>
+    </section></details>
+    <section class="panel" id="results-panel">
+      <div class="section-title"><div><h2 id="results-title">3. 本考试全部客观题成绩</h2><p class="muted">多次上传统一列出；身份未关联、主观题未终评不影响客观题成绩。异常答卷按需复核。</p></div><div><button id="refresh-results" class="quiet">刷新本考试成绩</button><button id="export" class="quiet" disabled>导出客观题 CSV</button><button id="export-xlsx" class="quiet" disabled hidden>导出客观题 Excel</button></div></div>
+      <p id="exam-summary" role="status"></p><p id="version-note" class="muted"></p>
+      <label id="export-scope-wrap" class="field" hidden>导出范围<select id="export-scope"><option value="all">本考试全部客观题（保留待复核与历史版本说明）</option><option value="complete">仅当前版本有效客观题成绩</option></select></label>
+      <div id="results" class="results empty">完成一次上传后显示匿名答卷及各份分数。</div>
+      <details id="objective-analysis" hidden><summary>逐题正确率（当前版本有效客观题，独立统计）</summary><div id="objective-statistics"></div></details>
+      <div class="review-head"><h3>需要人工复核</h3><span id="review-count" class="count">0</span></div>
+      <div id="review-queue" class="review-queue empty">当前没有异常。</div>
+    </section>
+
+    <details class="panel template-setup">
+      <summary>设置并确认一个新的 OMR 版式（只需设置一次）</summary>
+      <p class="muted">需使用合成校准页或确认过的空白答题卡样本。设置后版式签名将用于自动匹配和复用。</p>
+      <div class="two-fields">
+        <label class="field">版式名称<input id="new-template-name" value="新 OMR 版式"></label>
+        <label class="field">题数<input id="new-template-count" type="number" min="1" max="100" value="16"></label>
+        <label class="field">栏数<select id="new-template-columns"><option value="1">单栏</option><option value="2" selected>双栏</option></select></label>
+        <label class="field">版式签名（1–14）<input id="new-template-signature" type="number" min="1" max="14" value="13"></label>
+      </div>
+      <label class="upload-box compact" for="calibration"><strong>选择一张校准页</strong><span>本步骤只确认一次模板，不用于日常逐张确认</span><input id="calibration" type="file" accept="image/*"></label>
+      <button class="quiet" id="confirm-template">验证并确认模板</button>
+      <p id="template-state" class="status" aria-live="polite"></p>
+    </details>
+  </main>
+  <footer>双模型独立识别 · 答案键确定性计分 · 匿名编号 · 后台哈希与审计</footer>
+  <script src="__OBJECTIVE_BASE__/static/app.js" defer></script>
+</body>
+</html>

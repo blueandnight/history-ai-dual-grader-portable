@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f5f7fb">
+  <title>历史学科 AI 双评阅卷系统</title>
+  <link rel="stylesheet" href="/static/styles.css?v=20261008-p1-polish-1">
+  <link rel="stylesheet" href="/static/auth.css?v=20261020-crop-dialog-scroll-1">
+</head>
+<body>
+  <a class="skip-link" href="#grading-section">跳到批改工作台</a>
+
+  <header class="topbar">
+    <div class="brand-lockup">
+      <span class="brand-mark" aria-hidden="true">史</span>
+      <div>
+        <p class="eyebrow">私人阅卷工作台</p>
+        <h1>历史学科 AI 双评阅卷系统</h1>
+        <p class="subtitle">无需专用答题卡 · 双模型独立评阅 · 教师逐点终评</p>
+      </div>
+    </div>
+    <div class="header-actions">
+      <div id="status" class="status" role="status" aria-live="polite">正在检查服务…</div>
+      <details class="service-menu">
+        <summary>服务管理</summary>
+        <div class="service-actions">
+          <a class="button secondary" href="/help" target="_blank" rel="noopener">使用帮助</a>
+          <button type="button" class="button secondary restart-button" id="restart-service">重启服务</button>
+          <button type="button" class="button danger restart-button" id="shutdown-service">安全退出</button>
+        </div>
+      </details>
+    </div>
+  </header>
+
+  <nav class="grading-type-nav" aria-label="选择批改类型">
+    <a class="grading-type-choice" href="/objective/" aria-label="客观题批改，选项识别，确定性计分">
+      <strong>客观题批改</strong><span>选项识别 · 确定性计分</span>
+    </a>
+    <a class="grading-type-choice active" href="#grading-section" aria-current="page" aria-label="材料题批改，当前工作台">
+      <strong>材料题批改</strong><span>当前工作台</span>
+    </a>
+  </nav>
+  <p class="grading-type-note"><a class="button primary" href="/next/">进入统一阅卷工作台 →</a> 创建考试、上传答卷、教师终评与统一成绩集中办理。当前页面保留旧版操作。</p>
+
+  <div class="app-frame">
+    <nav class="main-nav" role="tablist" aria-label="主导航">
+      <button type="button" class="main-nav-tab active" id="main-tab-grading" role="tab" aria-controls="view-grading" aria-selected="true" tabindex="0" data-app-view-target="grading"><span aria-hidden="true">01</span><strong>开始批改</strong><small>采集 · 队列 · 复核</small></button>
+      <button type="button" class="main-nav-tab" id="main-tab-rubric" role="tab" aria-controls="view-rubric" aria-selected="false" tabindex="-1" data-app-view-target="rubric"><span aria-hidden="true">02</span><strong>题目与评分细则</strong><small>新建 · 审核 · 预览</small></button>
+      <button type="button" class="main-nav-tab" id="main-tab-history" role="tab" aria-controls="view-history" aria-selected="false" tabindex="-1" data-app-view-target="history"><span aria-hidden="true">03</span><strong>历史与导出</strong><small>成绩 · 任务 · 审计</small></button>
+      <button type="button" class="main-nav-tab" id="main-tab-management" role="tab" aria-controls="view-management" aria-selected="false" tabindex="-1" data-app-view-target="management"><span aria-hidden="true">04</span><strong>系统管理</strong><small>模型 · 手机 · 数据</small></button>
+      <button type="button" class="main-nav-tab" id="main-tab-exam-create" role="tab" aria-controls="view-exam-create" aria-selected="false" tabindex="-1" data-app-view-target="exam-create"><span aria-hidden="true">05</span><strong>新建考试</strong><small>上传 Word / PDF</small></button>
+      <button type="button" class="main-nav-tab" id="main-tab-users" role="tab" aria-controls="view-users" aria-selected="false" tabindex="-1" data-app-view-target="users" hidden><span aria-hidden="true">06</span><strong>用户管理</strong><small>教师 · 密码 · 状态</small></button>
+    </nav>
+    <main class="shell" id="main-content">
+    <section class="app-view" id="view-users" data-app-view="users" role="tabpanel" aria-label="用户管理" hidden>
+      <header class="page-heading"><div><span class="section-kicker">管理员</span><h2>用户管理</h2><p>教师使用独立账号，共享现有考试与阅卷数据。忘记密码由管理员重置，无需邮箱。</p></div></header>
+      <section class="panel"><h3>新建教师</h3><form id="create-teacher-form" class="form-grid">
+        <label>用户名<input id="teacher-username" required minlength="3" maxlength="64" autocomplete="off" pattern="[A-Za-z][A-Za-z0-9_.-]{2,63}" placeholder="英文字母开头，可含数字、下划线、点和短横线"></label>
+        <label>临时密码<input id="teacher-password" type="password" required minlength="12" maxlength="512" autocomplete="new-password" placeholder="至少12个字符"></label>
+        <button class="button primary" type="submit">创建教师账号</button>
+      </form><p id="users-status" class="hint" role="status" aria-live="polite"></p></section>
+      <section class="panel"><div class="section-heading"><h3>账号列表</h3><button id="refresh-users" type="button" class="button secondary">刷新</button></div><div id="users-list" class="users-list"></div></section>
+      <dialog id="reset-teacher-dialog"><form id="reset-teacher-form" class="form-grid"><h3>重置教师密码</h3><p id="reset-teacher-name"></p><label>新密码<input id="reset-teacher-password" type="password" required minlength="12" maxlength="512" autocomplete="new-password"></label><p class="muted">旧密码及已有登录会话会立即失效。</p><p id="reset-teacher-error" role="alert"></p><div class="settings-actions"><button type="submit" class="button primary">保存新密码</button><button id="cancel-teacher-reset" type="button" class="button secondary">取消</button></div></form></dialog>
+    </section>
+    <section class="app-view active" id="view-grading" data-app-view="grading" role="tabpanel" aria-label="开始批改">
+      <section class="workflow-overview" aria-label="批改准备状态">
+        <div class="workflow-overview-head">
+          <div class="workflow-overview-title">
+            <span class="overview-check" aria-hidden="true">✓</span>
+            <div><strong>开批前检查</strong><span>确认题目、模型和采集方式；花名册为可选项。</span></div>
+          </div>
+          <a class="text-link" href="#grading-section">进入批改工作台 →</a>
+        </div>
+        <div class="workflow-overview-steps">
+          <a class="readiness-card" href="#model-settings"><span>01</span><strong>模型</strong><small id="readiness-model">正在检查</small></a>
+          <a class="readiness-card" href="#assignment-section"><span>02</span><strong>题目</strong><small id="readiness-assignment">正在检查</small></a>
+          <a class="readiness-card" href="#roster-section"><span>03</span><strong>花名册</strong><small id="readiness-roster">可选</small></a>
+          <a class="readiness-card" href="#mobile-access-panel"><span>04</span><strong>手机</strong><small id="readiness-connection">可选</small></a>
+        </div>
+      </section>
+    <section class="panel grade-panel primary-workspace" id="grading-section">
+      <div class="section-heading">
+        <div>
+          <span class="section-kicker">高频操作</span>
+          <h2>批改工作台</h2><p id="grading-assignment-context" class="hint" aria-live="polite">请先选择考试或题目。</p>
+          <p>先选择适合当前场景的模式。三种模式共用同一套题目、花名册和安全门禁。</p>
+        </div>
+        <a class="button secondary compact-button" href="#mobile-access-panel">用手机拍照</a>
+      </div>
+
+      <div class="grading-mode-switcher" role="tablist" aria-label="选择批改模式">
+        <button type="button" class="grading-mode-tab active" id="mode-single" role="tab" aria-selected="true" aria-controls="single-grading-pane" data-grading-mode="single"><span class="mode-icon" aria-hidden="true">1</span><span><strong>单份批改</strong><small>一份一看，适合复核</small></span></button>
+        <button type="button" class="grading-mode-tab" id="mode-continuous" role="tab" aria-selected="false" aria-controls="single-grading-pane" data-grading-mode="continuous"><span class="mode-icon" aria-hidden="true">↻</span><span><strong>连续批改</strong><small>确认后自动下一份</small></span></button>
+        <button type="button" class="grading-mode-tab" id="mode-batch" role="tab" aria-selected="false" aria-controls="batch-grading-pane" data-grading-mode="batch"><span class="mode-icon" aria-hidden="true">批</span><span><strong>批量批改</strong><small>添加照片，集中核对分组与隐私</small></span></button>
+      </div>
+
+      <div id="single-grading-pane" class="grading-pane" role="tabpanel" aria-labelledby="mode-single">
+        <div class="grading-mode-banner" aria-label="当前模式说明"><strong id="single-mode-title">单份批改</strong><span id="single-mode-description">上传一名学生的答卷，立即查看建议分和证据，再由教师确认。</span></div>
+        <form id="submission-form" class="form-grid grading-form">
+          <div class="form-row two-columns"><label>选择作业<select id="assignment-select" required><option value="">请先保存一道题</option></select></label><label>班级（可选）<select id="class-select"><option value="">不关联花名册</option></select></label></div>
+          <label>学生姓名、座号或文件标识（可选）<input id="student-label" placeholder="例如：1、张三，或照片文件名"></label>
+          <div class="photo-source-field">
+            <div class="photo-source-actions">
+              <label class="upload-box upload-box-primary">拍照上传<input id="photos" type="file" accept="image/*" capture="environment"><span class="upload-action">打开相机拍一份答卷</span><small>每次拍一张，拍完可继续从相册补充</small></label>
+              <label class="upload-box upload-box-primary">从相册选择<input id="photos-album" type="file" accept="image/*" multiple><span class="upload-action">选择已有图片</span><small>支持多选，最多10张</small></label>
+            </div>
+            <small id="photo-count">尚未选择照片；单张原图≤25MiB、短边≥700px，最多10张</small>
+          </div>
+          <details class="optional-input"><summary>补充答案文字（可选）</summary><label>学生答案文字<textarea id="answer-text" placeholder="可用作 OCR 辅助；未配置视觉模型时也可用于规则演示。"></textarea></label></details>
+          <fieldset class="dual-review-option">
+            <label><input id="dual-review-enabled" type="checkbox" checked> <strong>双模型对照采集</strong></label>
+            <span>按电脑端已配置的 AI-A 和 AI-B 分别独立评分；手机可使用已就绪配置，模型与 Key 仅能在电脑端修改。</span>
+            <small id="dual-review-readiness" role="status">正在检查双评配置…</small>
+          </fieldset>
+          <button class="button primary submit-button" type="submit">开始辅助批改</button>
+        </form>
+        <div class="continuous-toolbar">
+          <div class="continuous-mode-control"><label class="continuous-toggle"><input id="continuous-mode" type="checkbox"> <span>确认后自动准备下一份</span></label><small>题目和班级保留，只清空学生标识、答案和照片。</small></div>
+          <div class="continuous-session-summary"><strong><span id="continuous-count">0</span> 份</strong><span id="continuous-status" class="muted">本次尚未确认成绩。</span></div>
+        </div>
+        <div id="submission-result" class="result-area empty" aria-live="polite">上传答卷后，批改结果会显示在这里</div>
+      </div>
+
+      <div id="batch-grading-pane" class="grading-pane" role="tabpanel" aria-labelledby="mode-batch" hidden>
+        <div id="batch-review-workspace" hidden><nav id="batch-review-navigation" class="batch-review-navigation" aria-label="批次评审导航"></nav></div>
+        <div class="batch-section">
+          <div class="batch-intro"><div><span class="section-kicker">批量模式</span><h3>原照片批量批改，批次集中核对</h3><p>默认按上传照片批改，不按试卷模板自动裁切。所有实际发出的图片都会先集中预览，教师确认后才开始批改。班级与花名册均为可选项，答卷按系统匿名编号保存。</p></div></div>
+          <p class="hint" id="batch-capacity-note"><strong>批量上传：</strong>账号登录后每批最多100份，可一次上传50份整班答卷；临时手机访问码每批最多20份。每份答卷最多10张照片。</p>
+          <form id="batch-form" class="form-grid">
+            <label>选择作业<select id="batch-assignment-select" required><option value="">请先保存一道题</option></select></label>
+            <label>班级（可选）<select id="batch-class-select"><option value="">不关联花名册</option></select></label>
+            <label>考试（可选）<select id="batch-exam-select" disabled><option value="">新建本次考试 / 作业批改</option></select><small>原照片批改可直接处理整页照片；自动裁切需选择已设置答题区的考试。不依据文件名推断学生。</small></label>
+            <label>图片处理方式<select id="batch-grading-input-mode"><option value="original_photo" selected>原照片批改</option><option value="auto_crop">按答题区自动裁切</option></select><small>原照片批改会保留整页照片；隐私预览和确认仍会保留。</small></label>
+            <label id="batch-page-layout-field" hidden>照片版式（自动裁切时）<select id="batch-page-layout"><option value="single_page">单页照片</option><option value="double_spread">双页展开照片</option></select></label>
+            <label>照片分组方式<select id="batch-group-mode"><option value="each">每张照片一名学生（单页）</option><option value="all">所有照片为一份多页答卷</option></select></label>
+            <div class="photo-source-field">
+              <div class="photo-source-actions">
+                <label class="upload-box">拍照添加<input id="batch-photos" type="file" accept="image/*" capture="environment"><span class="upload-action">手机相机逐张添加</span><small>每次拍一张，适合少量补拍</small></label>
+                <label class="upload-box">从相册批量选择<input id="batch-photos-album" type="file" accept="image/*" multiple><span class="upload-action">一次选择整批照片</span><small>支持多选，按所选照片顺序分组</small></label>
+              </div>
+              <small id="batch-photo-count">尚未选择照片；单张原图≤25MiB、每份最多10张</small>
+            </div>
+            <fieldset class="dual-review-option batch-dual-review-option">
+              <label><input id="batch-dual-review-enabled" type="checkbox" checked> <strong>本批启用双模型对照采集</strong></label>
+              <span>每份答卷按电脑端已配置的 AI-A 和 AI-B 分别独立评分；手机可使用已就绪配置，教师仍逐份确认最终成绩。</span>
+              <small id="batch-dual-review-readiness" role="status">正在检查双评配置…</small>
+            </fieldset>
+            <button class="button primary submit-button" type="submit">上传并预览分组</button>
+          </form>
+          <div id="batch-identity-summary" class="hint" role="status" hidden></div>
+          <div class="camera-capture-box">
+            <div class="camera-capture-head"><div><span class="feature-badge">手机专用</span><h4>连续拍摄队列</h4><p>连续拍摄每次最多20张照片，每张按一名学生预览。超过20份可分次拍摄，或先用手机相机拍好，再通过上方“从相册批量选择”上传。开始批改前请核对顺序和学生标识。</p></div><button id="open-camera-session" class="button secondary" type="button">开始连续拍摄</button></div>
+            <div id="camera-session" class="camera-session" hidden>
+              <div class="camera-session-status"><strong id="camera-session-count">已拍 0 / 20 张</strong><span id="camera-session-note">正在准备相机；如果当前手机地址是 HTTP，将自动显示系统相机兼容入口。</span></div>
+              <div class="camera-preview-wrap"><video id="camera-preview" autoplay playsinline muted></video><div id="camera-preview-placeholder" class="camera-preview-placeholder">相机预览将在这里显示</div></div>
+              <canvas id="camera-canvas" hidden></canvas>
+              <div class="camera-session-actions"><button id="camera-start" class="button secondary" type="button">重新开启相机</button><button id="camera-capture" class="button primary" type="button" disabled>拍一张</button><button id="camera-finish" class="button primary" type="button" disabled>完成拍摄并预览</button><button id="camera-cancel" class="button danger" type="button">取消本次拍摄</button></div>
+              <div class="camera-fallback-actions">
+                <label class="button secondary camera-fallback-upload">系统相机逐张添加<input id="camera-fallback-input" type="file" accept="image/*" capture="environment"></label>
+                <label class="button secondary camera-fallback-upload">从相册逐张添加<input id="camera-album-input" type="file" accept="image/*" multiple></label>
+              </div>
+              <small class="camera-fallback-note">若浏览器不允许网页直接调用相机，可从系统相机逐张拍摄，也可从相册一次添加多张；照片都会加入同一个队列。</small>
+              <div id="camera-thumbs" class="camera-thumbs" aria-live="polite"></div>
+            </div>
+          </div>
+          <div id="batch-result" class="result-area empty" aria-live="polite">选择整批照片后，会先在这里显示分组预览</div>
+        </div>
+      </div>
+    </section>
+    </section>
+
+    <section class="app-view" id="view-rubric" data-app-view="rubric" role="tabpanel" aria-label="题目与评分细则" hidden>
+      <header class="page-heading"><div><span class="section-kicker">题目工作区</span><h2>题目与评分细则</h2><p>用于手动录题和维护评分细则。整份 Word / PDF 试卷请从“新建考试”导入；这里可直接录入题目、参考答案和评分点。</p></div></header>
+    <section class="panel intro-panel" id="assignment-section">
+        <div class="section-heading"><div><span class="section-kicker">首次准备</span><h2>录入题目与评分细则</h2><p>先按试卷题号添加大题，再在每道大题下添加小题。每个小题单独设置题目、参考答案、分值和评分细则；大题与全卷总分自动汇总。</p></div><span id="assignment-total" class="total-badge">全卷满分合计：0</span></div>
+        <form id="assignment-form" class="form-grid">
+          <label>作业名称<input id="assignment-name" required placeholder="例如：辛亥革命材料题" value="历史材料题练习"></label>
+      <label>全卷背景/总说明（可选）<textarea id="question" placeholder="填写适用于多道大题的统一背景或作答说明；各大题专属材料填写在对应大题分组中。"></textarea></label>
+        <label>题目文件（可选，TXT/MD）<input id="question-file" type="file" accept=".txt,.md,text/plain,text/markdown"></label>
+        <div class="docx-import-box">
+          <div><strong>从 Word 试卷导入材料题</strong><p>选择 .docx 后先解析为可编辑草稿；题目、参考答案和分值需要核对，评分点不会自动编造。</p></div>
+          <div class="docx-import-controls"><input id="question-docx-file" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"><button type="button" class="button secondary" id="import-question-docx">解析 Word 草稿</button></div>
+          <p id="question-docx-status" class="hint" role="status"></p>
+        </div>
+        <div class="criteria-head"><div><h3>大题与小题</h3><p>例如第17题下设17.1、17.2、17.3，第18题下设18.1、18.2、18.3。每小题独立评分；按得分点计分时，参考答案可列多个备选要点，满分自动封顶。</p></div><button type="button" class="button secondary" id="generate-all-rubric">AI生成全部评分点</button><button type="button" class="button secondary" id="add-major-question">＋添加大题</button></div>
+        <div id="major-questions-list" class="major-questions-list"></div>
+        <button class="button primary submit-button" type="submit">保存整卷题目</button>
+      </form>
+    </section>
+    </section>
+
+    <section class="app-view" id="view-exam-create" data-app-view="exam-create" role="tabpanel" aria-label="新建考试" hidden>
+      <header class="page-heading"><div><span class="section-kicker">考试准备</span><h2>新建考试</h2><p>整份试卷从这里导入；手动录题请使用“题目与评分细则”。Word / DOCX 用于识别题目、答案和评分信息；PDF 用于保留最终打印版式和后续页面定位。可只上传其中一份。</p></div></header>
+      <section class="panel exam-import-panel">
+        <div class="exam-source-upload-grid">
+          <label class="exam-source-upload"><span class="exam-source-badge">推荐</span><strong>试卷 Word / DOCX</strong><small>识别题目、选项、答案和评分信息</small><input id="exam-docx-file" type="file" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"></label>
+          <label class="exam-source-upload"><span class="exam-source-badge">推荐</span><strong>最终打印 PDF</strong><small>保存页码、版式和页面 reference</small><input id="exam-pdf-file" type="file" accept=".pdf,application/pdf"></label>
+        </div>
+        <div class="exam-import-actions"><button id="parse-exam-draft" class="button primary" type="button">解析并生成草稿</button><span class="muted">上传和解析不会创建正式考试。</span></div>
+        <p id="exam-import-status" class="hint" role="status" aria-live="polite"></p>
+        <section id="exam-draft-panel" class="exam-draft-panel" hidden aria-label="考试草稿确认区">
+          <div id="exam-source-summary" class="exam-source-summary"></div>
+          <div id="exam-source-actions" class="exam-source-actions" hidden></div>
+          <div id="exam-ai-parse-box" class="exam-ai-parse-box" hidden>
+            <button id="ai-parse-exam-draft" class="button secondary" type="button">AI 解析题号/答案</button>
+            <span id="exam-ai-parse-status" class="muted">发送 Word/PDF 提取的文字（不发送图片），结果需要教师核对。</span>
+          </div>
+          <div id="exam-ai-parse-summary" class="exam-ai-parse-summary" hidden></div>
+          <label class="exam-name-field">考试名称<input id="exam-create-name" type="text" maxlength="160" placeholder="例如：第一单元政治制度测试"></label>
+          <div id="exam-warning-groups" class="exam-warning-groups"></div>
+          <details id="exam-reference-details" class="exam-reference-details" hidden><summary>查看 PDF 页面 reference</summary><div id="exam-reference-list" class="exam-reference-list"></div></details>
+          <section class="exam-confirm-section"><div class="exam-confirm-heading"><h3>客观题答案</h3><p>核对题号和正确选项；题干默认折叠，答案可以修改。</p></div><div id="exam-objective-list" class="exam-objective-list"></div></section>
+          <section class="exam-confirm-section"><div class="exam-confirm-heading"><h3>主观题与评分草稿</h3><p>每个候选评分点需要填写分值；每个小题需要填写满分。系统不会自动补分。</p></div><div id="exam-subjective-list" class="exam-subjective-list"></div></section>
+          <div class="exam-confirm-checks">
+            <label id="exam-pair-confirm-row" hidden><input id="exam-source-confirm" type="checkbox"> 我确认 Word 与 PDF 属于同一份试卷</label>
+            <label><input id="exam-teacher-confirm" type="checkbox"> 我已核对题目、答案、参考答案和评分点</label>
+          </div>
+          <div id="exam-create-blockers" class="exam-create-blockers" aria-live="polite"></div>
+          <div class="exam-create-footer"><button id="exam-create-button" class="button primary submit-button" type="button">确认创建考试</button><p id="exam-create-status" class="hint" role="status" aria-live="polite"></p></div>
+        </section>
+        <section id="exam-created-result" class="exam-created-result" hidden aria-live="polite"></section>
+      </section>
+    </section>
+
+    <section class="app-view" id="view-management" data-app-view="management" role="tabpanel" aria-label="系统管理" hidden>
+      <header class="page-heading"><div><span class="section-kicker">本机管理</span><h2>系统管理</h2><p>这些设置只影响运行此程序的电脑；手机端不能更改模型、备份或服务状态。</p></div></header>
+    <section class="panel mobile-access-box" id="mobile-access-panel">
+      <div class="section-heading"><div><span class="section-kicker">手机拍照入口</span><h2>连接手机</h2><p>推荐使用 USB 网络共享，稳定且不依赖 Wi‑Fi。手机只是拍照和上传入口，批改服务仍运行在电脑。</p></div><span class="privacy-badge">临时授权 · 45分钟</span></div>
+      <ol class="connection-steps">
+        <li><span>1</span><div><strong>连接网络</strong><small>Android 用数据线连接电脑并开启“USB 网络共享”；也可以让手机与电脑连接同一 Wi‑Fi。</small></div></li>
+        <li><span>2</span><div><strong>生成临时访问码</strong><small>访问码只在本机生成，重启服务或主动撤销后立即失效。</small></div></li>
+        <li><span>3</span><div><strong>手机打开完整地址</strong><small>复制下方地址发送到手机，在浏览器打开即可拍照上传。</small></div></li>
+      </ol>
+      <div class="connection-console">
+        <div class="mobile-network-info"><div class="mobile-network-heading"><div><strong>电脑连接地址</strong><span id="mobile-network-note" class="muted">正在检测…</span></div><button type="button" class="button secondary compact-button" id="refresh-mobile-network">刷新地址</button></div><div id="mobile-network-addresses" class="mobile-network-addresses" aria-live="polite"><span class="muted">正在检测电脑网络地址…</span></div><div class="usb-network-guide"><strong>没有看到“USB 数据线”？</strong><span>确认手机已开启 USB 网络共享；iPhone 需开启个人热点并安装 Apple 设备驱动。仍不可用时改用同一 Wi‑Fi。</span></div></div>
+        <div class="token-panel"><div class="mobile-access-actions"><button type="button" class="button primary" id="generate-mobile-token">生成手机访问码</button><button type="button" class="button secondary" id="revoke-mobile-token">撤销</button></div><div id="mobile-token-note" class="muted">尚未生成手机访问码</div><code id="mobile-token-value" class="mobile-token-value" aria-live="polite">—</code><div class="mobile-url-row"><code id="mobile-access-url" class="mobile-token-value" aria-live="polite">生成访问码后显示完整手机地址</code><button type="button" class="button secondary" id="copy-mobile-url" disabled>复制手机地址</button></div></div>
+      </div>
+    </section>
+
+    <header class="page-heading"><div><span class="section-kicker">人员与模型</span><h3>本机配置</h3><p>花名册可按任课老师自行导入；模型 API Key 不会写入 U 盘。</p></div></header>
+    <div class="setup-grid">
+    <section class="panel roster-panel" id="roster-section">
+      <div class="section-heading"><div><span class="section-kicker">正式班级准备</span><h2>班级花名册</h2><p>CSV字段：姓名、班级和可选学号；填写默认班级即可。也兼容现有座号、姓名表格。导入只新增，不删除已有学生；修改学号请在下方编辑。</p></div></div>
+      <form id="roster-form" class="form-grid">
+        <div class="form-row two-columns"><label>花名册文件<input id="roster-file" type="file" accept=".csv,.tsv,.txt,.xlsx,text/csv,text/tab-separated-values,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"></label><label>默认班级（文件没有班级列时填写）<input id="roster-default-class" placeholder="例如：高一（1）班"></label></div>
+        <div class="settings-actions"><button class="button primary" type="submit">导入花名册</button><span id="roster-note" class="muted">尚未导入花名册</span></div>
+        <div id="roster-classes" class="roster-classes muted">当前没有班级名单</div>
+      </form>
+      <form id="roster-add-form" class="form-grid">
+        <label>班级名称<input name="class_name" required maxlength="100" placeholder="高一（1）班"></label>
+        <div class="form-row two-columns"><label>学号<input name="student_no" maxlength="40" placeholder="01、23、A17"></label><label>姓名<input name="display_name" required maxlength="100"></label></div>
+        <button class="button secondary" type="submit">新增学生 / 建立班级</button>
+      </form>
+      <details><summary>查看与修改花名册</summary><label>班级<select id="roster-editor-class"><option value="">选择班级查看或修改</option></select></label><p class="hint">学号可选。修改名单不改变学生ID或历史答卷归属。</p><div id="roster-students-editor"></div></details>
+    </section>
+
+    <section class="panel settings-panel" id="model-settings">
+      <div class="section-heading"><div><span class="section-kicker">电脑本机配置</span><h2>双评模型设置</h2><p>双评由两个模型分别独立评分。请分别配置 AI-A 和 AI-B；Key 只在本机加密保存，不会写入 U 盘或在页面回显。</p></div><span class="privacy-badge">手机端不可修改</span></div>
+      <div class="dual-model-grid" aria-label="双评模型配置">
+        <form class="dual-model-card" id="dual-model-a-form" data-side="A">
+          <div class="dual-model-card-heading"><div><span class="section-kicker">AI-A · 独立评分</span><h3 id="dual-model-a-title">正在读取模型…</h3><p id="dual-model-a-meta" class="muted">选择此侧视觉模型</p></div><span class="dual-model-state" id="dual-model-a-state">检查中…</span></div>
+          <label>AI-A 视觉模型<select id="dual-model-a-preset"><option value="">正在加载模型列表…</option></select></label>
+          <label class="dual-model-key-label" id="dual-model-a-key-label">服务商 API Key<input id="dual-model-a-key" type="password" autocomplete="new-password" maxlength="500" placeholder="可留空：沿用已保存的 Key；不会回显"></label>
+          <div class="settings-actions"><button class="button primary" type="submit">保存 AI-A 配置</button><span class="muted" id="dual-model-a-note">模型选择与 Key 分别保存在本机。</span></div>
+        </form>
+        <form class="dual-model-card" id="dual-model-b-form" data-side="B">
+          <div class="dual-model-card-heading"><div><span class="section-kicker">AI-B · 独立复评</span><h3 id="dual-model-b-title">正在读取模型…</h3><p id="dual-model-b-meta" class="muted">选择此侧视觉模型</p></div><span class="dual-model-state" id="dual-model-b-state">检查中…</span></div>
+          <label>AI-B 视觉模型<select id="dual-model-b-preset"><option value="">正在加载模型列表…</option></select></label>
+          <label class="dual-model-key-label" id="dual-model-b-key-label">服务商 API Key<input id="dual-model-b-key" type="password" autocomplete="new-password" maxlength="500" placeholder="可留空：沿用已保存的 Key；不会回显"></label>
+          <div class="settings-actions"><button class="button primary" type="submit">保存 AI-B 配置</button><span class="muted" id="dual-model-b-note">模型选择与 Key 分别保存在本机。</span></div>
+        </form>
+      </div>
+      <p class="model-settings-hint muted">双评批改由 AI-A 和 AI-B 独立完成。AI 生成评分点会复用 AI-A 当前选择的模型和本机 Key，不会调用 AI-B，也不需要重复配置；下方单模型设置仅保留给旧单评兼容流程。</p>
+      <details class="legacy-model-settings">
+        <summary>单模型与其他视觉模型（可选）</summary>
+        <form id="settings-form" class="settings-form">
+        <label>视觉模型预设<select id="model-preset"><option value="">正在加载模型列表…</option></select></label>
+        <div id="model-preset-note" class="model-preset-note muted">正在读取模型预设…</div>
+        <div class="model-config-grid"><label>接口地址<input id="model-base-url" autocomplete="off" placeholder="例如：https://api.example.com/v1"></label><label>模型 ID<input id="model-id" autocomplete="off" placeholder="例如：qwen3.5-flash"></label></div>
+        <label><span id="api-key-label">当前服务商 API Key</span><input id="api-key" type="password" autocomplete="new-password" placeholder="只在电脑本机输入，不会显示"></label>
+        <div class="key-storage-options" role="group" aria-label="Key 保存方式"><label><input type="radio" name="key-storage" value="remember" checked> 记住本机</label><label><input type="radio" name="key-storage" value="session"> 仅本次使用</label></div>
+        <div class="settings-actions"><button class="button primary" type="submit">保存模型配置</button><span id="settings-note" class="muted">正在检查 Key 状态…</span></div>
+        <details class="advanced-settings"><summary>自定义模型预设</summary><div class="custom-preset-box"><p>保存预设名称、接口地址、模型 ID 和备注，不保存 API Key。</p><p>桌面本机可查询所填接口的模型列表，仅发送当前输入的Key，不会调用批改模型或自动沿用已保存Key。</p><button class="button secondary" type="button" id="fetch-custom-models">确认查询模型列表</button><select id="custom-model-list" hidden aria-label="上游模型列表"></select><span id="custom-model-status" class="muted"></span><div class="model-config-grid"><label>预设名称<input id="custom-preset-label" autocomplete="off" placeholder="例如：DeepSeek V4.1 Pro"></label><label>备注（可选）<input id="custom-preset-note" autocomplete="off" placeholder="例如：需确认已开通图片输入"></label></div><div class="settings-actions"><button class="button secondary" type="button" id="save-custom-preset">保存为自定义预设</button><button class="button danger" type="button" id="delete-custom-preset" disabled>删除当前自定义预设</button><span id="custom-preset-status" class="muted">选择或填写接口后，可保存为自定义预设。</span></div></div></details>
+        </form>
+      </details>
+    </section>
+    </div>
+    <section class="panel storage-panel" id="storage-section">
+      <div class="section-heading"><div><h2>备份与恢复</h2><p>备份包含数据库、照片和花名册，不包含 API Key 或 DPAPI 文件。恢复前会自动创建安全备份。</p></div></div>
+      <div class="storage-form"><div id="storage-summary" class="storage-summary muted">正在读取数据目录和剩余空间…</div><div class="storage-actions"><button type="button" class="button primary" id="create-backup">立即备份</button><button type="button" class="button secondary" id="refresh-backups">刷新列表</button><a class="button secondary" href="/api/diagnostics-export">导出诊断包</a></div><label>选择要恢复的备份<select id="backup-select"><option value="">正在读取备份列表…</option></select></label><div class="storage-actions"><button type="button" class="button danger" id="restore-backup">恢复选中的备份</button><span id="backup-note" class="muted">恢复操作需要教师登录</span></div>
+        <div class="retention-preview"><h3>原图保留计划</h3><p class="muted">这里只统计并模拟计划清理内容，不会删除原图、成绩、数据库或备份。正式清理需另行授权。</p><label>计划保留天数<input id="retention-days" type="number" min="0" max="3650" step="1" value="0"></label><div class="storage-actions"><button type="button" class="button secondary" id="preview-retention">生成 dry-run 预览</button></div><div id="retention-summary" class="storage-summary muted">尚未生成预览</div></div>
+      </div>
+    </section>
+    </section>
+
+    <section class="app-view" id="view-history" data-app-view="history" role="tabpanel" aria-label="历史与导出" hidden>
+      <header class="page-heading"><div><span class="section-kicker">成绩管理</span><h2>历史与导出</h2><p>按作业查看批改记录和复核状态；正式成绩导出只包含已确认的合格记录。</p></div></header>
+    <div class="management-grid">
+    <section class="panel recovery-panel" id="recovery-section">
+      <div class="history-head"><div><h2>待恢复任务</h2></div><button type="button" class="button secondary" id="refresh-recovery">刷新</button></div>
+      <p class="muted">服务重启后，未确定或处理失败的任务会保留在这里。重试前请先确认服务商是否已计费。本列表只在电脑本机显示。</p>
+      <div id="recovery-list" class="recovery-list"><p class="muted">正在读取待恢复任务…</p></div>
+    </section>
+
+    <section class="panel history-panel" id="history-section">
+      <div class="history-head"><div><h2>本地作业记录</h2></div><button type="button" class="button secondary" id="refresh">刷新</button></div>
+      <div id="assignment-history" class="history-list"><p class="muted">暂无记录</p></div>
+    </section>
+
+    <section class="panel exam-layout-profile-panel" id="exam-layout-profile-panel" hidden aria-label="正式考试答题区设置">
+      <div class="history-head"><div><h2 id="exam-layout-profile-title">答题区设置</h2></div><button type="button" class="button secondary" id="close-exam-layout-profile">返回考试列表</button></div>
+      <div id="exam-layout-profile-summary" class="exam-layout-profile-summary"><p class="muted">选择一场正式考试开始设置。</p></div>
+      <div id="exam-layout-profile-workspace" hidden>
+        <div class="exam-layout-profile-toolbar">
+          <div id="exam-layout-profile-question-list" class="exam-layout-profile-question-list" aria-label="选择主观题小题"></div>
+          <label>PDF 试卷页<select id="exam-layout-profile-page" aria-label="PDF试卷页"></select></label>
+        </div>
+        <div id="exam-layout-profile-objective" class="exam-layout-objective" hidden>
+          <div class="exam-layout-objective-head"><strong>客观题答案行区域</strong><span class="muted">按题号顺序识别手写 A/B/C/D；可在答题卡同一页与主观题一起框选（本轮先保存区域，客观题自动识别计分将在下一阶段接入）。</span></div>
+          <div class="exam-layout-objective-controls">
+            <label>起始题号<select id="exam-layout-objective-start" aria-label="客观题起始题号"></select></label>
+            <label>结束题号<select id="exam-layout-objective-end" aria-label="客观题结束题号"></select></label>
+            <button id="exam-layout-objective-draw" class="button secondary" type="button">框选答案行</button>
+          </div>
+          <div id="exam-layout-objective-list" class="exam-layout-objective-list"></div>
+        </div>
+        <div class="exam-layout-profile-selection"><span id="exam-layout-profile-selection-label">先选择一个小题，再在页面上拖出答题区。</span><button id="delete-exam-layout-region" class="button secondary" type="button" disabled>删除当前框</button></div>
+        <div class="exam-layout-canvas-scroll"><div id="exam-layout-reference-frame" class="exam-layout-canvas-frame" aria-label="PDF页面答题区框选画布"><img id="exam-layout-reference-image" alt="PDF试卷页面 reference"><div id="exam-layout-region-overlays" class="exam-layout-region-overlays"></div><div id="exam-layout-drag-rect" class="exam-layout-drag-rect" hidden></div></div></div>
+        <p id="exam-layout-profile-note" class="hint" role="status" aria-live="polite">在 PDF 页上拖动鼠标框选；保存后，其他学生答卷可复用这套试卷坐标。</p>
+        <div class="exam-layout-profile-footer"><span id="exam-layout-profile-progress" class="muted"></span><button id="start-grading-from-layout" class="button secondary" type="button">开始批改</button><button id="save-exam-layout-profile" class="button primary" type="button">保存答题区设置</button></div>
+        <section class="student-auto-crop-test" id="student-auto-crop-test-panel" hidden aria-label="测试学生答卷自动裁切">
+          <h3>测试学生答卷</h3>
+          <p class="muted">本机诊断：照片只在本地处理，不调用模型、不评分。上传一张单页或双页展开照片，检查自动匹配和已保存的答题区 crop。</p>
+          <div class="student-auto-crop-controls">
+            <label class="student-auto-crop-file">学生答卷照片<input id="student-auto-crop-file" type="file" accept="image/*"></label>
+            <fieldset><legend>照片类型</legend><label><input type="radio" name="student-auto-crop-mode" value="single_page" checked> 单页</label><label><input type="radio" name="student-auto-crop-mode" value="double_spread"> 双页展开</label></fieldset>
+            <button id="student-auto-crop-run" class="button primary" type="button">自动定位并裁切</button>
+          </div>
+          <p id="student-auto-crop-note" class="hint" role="status" aria-live="polite">请先保存当前答题区修改，再测试学生答卷。</p>
+          <div id="student-auto-crop-result" class="student-auto-crop-result" aria-live="polite"></div>
+        </section>
+      </div>
+    </section>
+
+    <section class="panel evaluation-panel" id="evaluation-section">
+      <div class="history-head"><div><h2>评测与审计</h2></div><button type="button" class="button secondary" id="refresh-evaluation">刷新</button></div>
+      <p class="muted">这里只读取电脑本机明确放入 <code>evaluation/manifest.json</code> 的匿名评测清单，不自动扫描正式作业、学生照片或答案，也不会调用模型。</p>
+      <div id="evaluation-summary" class="evaluation-summary"><p class="muted">正在读取评测状态…</p></div>
+      <div id="audit-summary" class="audit-summary"><p class="muted">正在校验本地审计链…</p></div>
+    </section>
+    </div>
+    </section>
+    </main>
+  </div>
+
+  <nav class="mobile-action-bar" role="group" aria-label="主导航">
+    <button type="button" class="active" data-app-view-target="grading" aria-pressed="true"><span aria-hidden="true">✦</span>批改</button>
+    <button type="button" data-app-view-target="rubric" aria-pressed="false"><span aria-hidden="true">▤</span>题目</button>
+    <button type="button" data-app-view-target="history" aria-pressed="false"><span aria-hidden="true">◷</span>历史</button>
+    <button type="button" data-app-view-target="management" aria-pressed="false"><span aria-hidden="true">⚙</span>管理</button>
+    <button type="button" data-app-view-target="exam-create" aria-pressed="false"><span aria-hidden="true">＋</span>新建</button>
+    <button type="button" data-app-view-target="users" aria-pressed="false" hidden><span aria-hidden="true">♙</span>用户</button>
+  </nav>
+
+  <template id="major-question-template">
+    <section class="major-question-card">
+      <div class="major-question-head">
+        <div class="major-question-identity"><strong>大题</strong><label>大题编号<input class="major-label" aria-label="大题编号" placeholder="例如17"></label></div>
+        <span class="major-total">本大题小题分值合计：0</span>
+        <button type="button" class="icon-button remove-major-question" title="删除大题及其小题" aria-label="删除大题及其小题">×</button>
+      </div>
+      <label>本大题材料/共同题干（可选）<textarea class="major-prompt" placeholder="粘贴本大题专属材料或共同题干；全卷共用内容请填写上方总说明。"></textarea></label>
+      <div class="major-subquestions-head"><h4>本大题小题</h4><button type="button" class="button secondary add-major-subquestion">＋添加小题</button></div>
+      <div class="subquestions-list"></div>
+    </section>
+  </template>
+  <template id="subquestion-template">
+    <div class="subquestion-card">
+      <div class="subquestion-title"><span>小题序号</span><input class="subq-label" value="1" aria-label="小题序号" placeholder="如1"><strong class="subq-full-label">17.1</strong><button type="button" class="icon-button remove-subquestion" title="删除小题" aria-label="删除小题">×</button></div>
+      <label>小题题目<textarea class="subq-question" placeholder="填写本小题题干与本题专属条件；所属大题材料已单独填写时无需重复。"></textarea></label>
+      <label>小题参考答案<textarea class="subq-answer" placeholder="粘贴本小题参考答案"></textarea></label>
+      <div class="subquestion-score-settings">
+        <label>计分方式<select class="subq-scoring-mode"><option value="point_bank">按得分点计分，满分封顶</option><option value="weighted">按评分项分值累计</option></select></label>
+        <label class="subq-point-bank-field">本小题满分<input class="subq-max-score" type="number" min="0.5" step="0.5" placeholder="如：6"></label>
+        <label class="subq-point-bank-field">每个有效要点分值<input class="subq-point-value" type="number" min="0.5" step="0.5" value="2"></label>
+        <button type="button" class="button secondary generate-rubric">AI生成评分点</button>
+      </div>
+      <div class="subq-scoring-guide" aria-live="polite"></div>
+      <label>本小题可接受答案要点<textarea class="subq-criteria" placeholder="一行一个不同的可接受要点；按得分点计分时，每点分值统一由上方设置（默认2分），无需逐行填写分值。&#10;例如6分题可列出4—5个候选点；答中任意3个不同有效点即可满分。&#10;需要不同评分项分别设分时，切换“按评分项分值累计”，再用：要点 | 分值 | 同义表达"></textarea></label>
+    </div>
+  </template>
+  <dialog id="exam-report-dialog" class="exam-report-dialog" aria-label="试卷分析报告">
+    <div class="exam-report-header">
+      <div><span class="section-kicker">教学评一体化</span><h2 id="exam-report-title">试卷分析报告</h2><p id="exam-report-status" class="hint" aria-live="polite"></p></div>
+      <button type="button" class="button secondary" id="close-exam-report">关闭</button>
+    </div>
+    <div id="exam-report-body" class="exam-report-body"></div>
+    <div id="exam-report-ai-box" class="exam-report-ai-box" hidden>
+      <label>本卷学习目标（建议填写，用于分析教学目标达成度）<textarea id="exam-report-objectives" rows="3" placeholder="例如：1. 能说明推恩令的内容与作用；2. 能概括科举制的影响；3. 能分析中央集权加强的表现。"></textarea></label>
+      <div class="settings-actions exam-report-actions">
+        <button type="button" class="button primary" id="generate-exam-report-ai">生成 AI 分析</button>
+        <button type="button" class="button secondary" id="download-exam-report" disabled>下载 Markdown</button>
+        <button type="button" class="button secondary" id="print-exam-report" disabled>打印 / 导出 PDF</button>
+      </div>
+      <p class="hint">AI 只接收匿名聚合统计和上面的学习目标，不接收学生姓名、照片或原始答卷；AI 不重新评分。</p>
+      <pre id="exam-report-ai-output" class="exam-report-ai-output" hidden></pre>
+    </div>
+  </dialog>
+  <script src="/static/auth.js"></script>
+  <script src="/static/roster-management.js?v=20261018-formal-flow-1"></script>
+  <script src="/static/app.js?v=20261021-import-scoring-mode-1"></script>
+  <script src="/static/users.js"></script>
+  <script src="/static/formal-grading.js?v=20261021-bulk-crop-review-1"></script>
+  <script src="/static/privacy-flow.js?v=20261018-formal-flow-1"></script>
+</body>
+</html>

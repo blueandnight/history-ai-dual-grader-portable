@@ -1,0 +1,62 @@
+[
+  {
+    "file": "ch_PP-OCRv4_det_infer.onnx",
+    "sha256": "d2a7720d45a54257208b1e13e36a8479894cb74155a5efe29462512d42f49da9",
+    "package": "rapidocr-onnxruntime==1.4.4",
+    "upstream": "PaddleOCR",
+    "format": "ONNX converted upstream models",
+    "license": "Apache-2.0",
+    "classification": "B",
+    "commercial_use": true,
+    "binary_redistribution": true,
+    "upstream_model_path": "PP-OCRv4/ch_PP-OCRv4_det_infer.onnx",
+    "official_source": "https://huggingface.co/SWHL/RapidOCR/blob/1cfba2e90fc938db55889873735088de210cc173/PP-OCRv4/ch_PP-OCRv4_det_infer.onnx",
+    "license_evidence": "https://huggingface.co/SWHL/RapidOCR/blob/1cfba2e90fc938db55889873735088de210cc173/README.md",
+    "required_notices": [
+      "Apache-2.0 full text",
+      "PaddleOCR/Baidu attribution",
+      "RapidOCR conversion attribution"
+    ],
+    "modified": false
+  },
+  {
+    "file": "ch_PP-OCRv4_rec_infer.onnx",
+    "sha256": "48fc40f24f6d2a207a2b1091d3437eb3cc3eb6b676dc3ef9c37384005483683b",
+    "package": "rapidocr-onnxruntime==1.4.4",
+    "upstream": "PaddleOCR",
+    "format": "ONNX converted upstream models",
+    "license": "Apache-2.0",
+    "classification": "B",
+    "commercial_use": true,
+    "binary_redistribution": true,
+    "upstream_model_path": "PP-OCRv4/ch_PP-OCRv4_rec_infer.onnx",
+    "official_source": "https://huggingface.co/SWHL/RapidOCR/blob/1cfba2e90fc938db55889873735088de210cc173/PP-OCRv4/ch_PP-OCRv4_rec_infer.onnx",
+    "license_evidence": "https://huggingface.co/SWHL/RapidOCR/blob/1cfba2e90fc938db55889873735088de210cc173/README.md",
+    "required_notices": [
+      "Apache-2.0 full text",
+      "PaddleOCR/Baidu attribution",
+      "RapidOCR conversion attribution"
+    ],
+    "modified": false
+  },
+  {
+    "file": "ch_ppocr_mobile_v2.0_cls_infer.onnx",
+    "sha256": "e47acedf663230f8863ff1ab0e64dd2d82b838fceb5957146dab185a89d6215c",
+    "package": "rapidocr-onnxruntime==1.4.4",
+    "upstream": "PaddleOCR",
+    "format": "ONNX converted upstream models",
+    "license": "Apache-2.0",
+    "classification": "B",
+    "commercial_use": true,
+    "binary_redistribution": true,
+    "upstream_model_path": "PP-OCRv1/ch_ppocr_mobile_v2.0_cls_infer.onnx",
+    "official_source": "https://huggingface.co/SWHL/RapidOCR/blob/1cfba2e90fc938db55889873735088de210cc173/PP-OCRv1/ch_ppocr_mobile_v2.0_cls_infer.onnx",
+    "license_evidence": "https://huggingface.co/SWHL/RapidOCR/blob/1cfba2e90fc938db55889873735088de210cc173/README.md",
+    "required_notices": [
+      "Apache-2.0 full text",
+      "PaddleOCR/Baidu attribution",
+      "RapidOCR conversion attribution"
+    ],
+    "modified": false
+  }
+]

@@ -1,0 +1,142 @@
+[
+  {
+    "name": "annotated-types",
+    "version": "0.8.0",
+    "license": "MIT"
+  },
+  {
+    "name": "argon2-cffi",
+    "version": "25.1.0",
+    "license": "MIT"
+  },
+  {
+    "name": "argon2-cffi-bindings",
+    "version": "26.1.0",
+    "license": "MIT"
+  },
+  {
+    "name": "blinker",
+    "version": "1.9.0",
+    "license": "see license text"
+  },
+  {
+    "name": "cffi",
+    "version": "2.1.1",
+    "license": "MIT-0"
+  },
+  {
+    "name": "click",
+    "version": "8.5.0",
+    "license": "BSD-3-Clause"
+  },
+  {
+    "name": "colorama",
+    "version": "0.4.6",
+    "license": "see license text"
+  },
+  {
+    "name": "Flask",
+    "version": "3.1.3",
+    "license": "BSD-3-Clause"
+  },
+  {
+    "name": "itsdangerous",
+    "version": "2.2.0",
+    "license": "see license text"
+  },
+  {
+    "name": "Jinja2",
+    "version": "3.1.6",
+    "license": "see license text"
+  },
+  {
+    "name": "MarkupSafe",
+    "version": "3.0.4",
+    "license": "BSD-3-Clause"
+  },
+  {
+    "name": "numpy",
+    "version": "2.5.3",
+    "license": "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0"
+  },
+  {
+    "name": "onnxruntime",
+    "version": "1.30.0",
+    "license": "MIT License"
+  },
+  {
+    "name": "opencv-python",
+    "version": "5.0.0.93",
+    "license": "Apache 2.0"
+  },
+  {
+    "name": "packaging",
+    "version": "26.3",
+    "license": "Apache-2.0 OR BSD-2-Clause"
+  },
+  {
+    "name": "pillow",
+    "version": "12.3.0",
+    "license": "MIT-CMU"
+  },
+  {
+    "name": "pyclipper",
+    "version": "1.4.0",
+    "license": "MIT"
+  },
+  {
+    "name": "pydantic",
+    "version": "2.14.2",
+    "license": "MIT"
+  },
+  {
+    "name": "pydantic_core",
+    "version": "2.50.2",
+    "license": "MIT"
+  },
+  {
+    "name": "pypdf",
+    "version": "6.21.4",
+    "license": "BSD-3-Clause"
+  },
+  {
+    "name": "pypdfium2",
+    "version": "5.14.0",
+    "license": "BSD-3-Clause, Apache-2.0, dependency licenses"
+  },
+  {
+    "name": "PyYAML",
+    "version": "6.0.3",
+    "license": "MIT"
+  },
+  {
+    "name": "rapidocr-onnxruntime",
+    "version": "1.4.4",
+    "license": "Apache-2.0"
+  },
+  {
+    "name": "setuptools",
+    "version": "84.2.1",
+    "license": "MIT"
+  },
+  {
+    "name": "shapely",
+    "version": "2.2.0",
+    "license": "BSD-3-Clause"
+  },
+  {
+    "name": "typing-inspection",
+    "version": "0.4.4",
+    "license": "MIT"
+  },
+  {
+    "name": "typing_extensions",
+    "version": "4.16.0",
+    "license": "PSF-2.0"
+  },
+  {
+    "name": "Werkzeug",
+    "version": "3.1.9",
+    "license": "BSD-3-Clause"
+  }
+]

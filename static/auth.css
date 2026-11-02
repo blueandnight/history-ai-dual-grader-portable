@@ -1,0 +1,91 @@
+.auth-gate { position: fixed; z-index: 1000; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(244, 247, 252, .97); }
+.auth-gate[hidden] { display: none; }
+.auth-card { width: min(420px, 100%); padding: 28px; border: 1px solid #d9e1ed; border-radius: 20px; background: #fff; box-shadow: 0 24px 70px rgba(24, 48, 83, .16); }
+.auth-card h2 { margin: 5px 0 8px; color: #1c3f7b; }
+.auth-card p { margin: 0 0 18px; color: #697586; }
+.auth-card label { display: grid; gap: 7px; margin: 13px 0; color: #27364a; font-size: 13px; font-weight: 700; }
+.auth-card input { width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid #cfd7e4; border-radius: 10px; font: inherit; }
+.auth-card [hidden] { display: none; }
+.auth-card button { width: 100%; min-height: 44px; margin-top: 8px; }
+.auth-error { min-height: 22px; margin: 10px 0 0 !important; color: #a23c3c !important; font-size: 13px; }
+.auth-user { display: flex; align-items: center; gap: 8px; color: #506075; font-size: 12px; }
+.auth-logout { padding: 7px 10px; border: 1px solid #d7deea; border-radius: 999px; color: #1c3f7b; background: #fff; cursor: pointer; font: inherit; font-weight: 700; }
+body.auth-locked > :not(.auth-gate):not(script) { visibility: hidden; }
+.ai-privacy-dialog { width: min(1000px, calc(100vw - 24px)); max-width: none; max-height: calc(100vh - 24px); padding: 0; border: 0; border-radius: 18px; color: #1e2c3e; background: #f7f9fc; box-shadow: 0 24px 80px rgba(16, 35, 65, .3); }
+.ai-privacy-dialog::backdrop { background: rgba(15, 28, 48, .72); }
+.ai-privacy-card { display: grid; gap: 12px; padding: 22px; }
+.ai-privacy-card > header, .ai-privacy-card > footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ai-privacy-card h2 { margin: 3px 0; color: #1c3f7b; }
+.ai-privacy-card p { margin: 0; line-height: 1.5; }
+.ai-privacy-filename, .ai-payload-meta { color: #59687b; font-size: 12px; overflow-wrap: anywhere; }
+.ai-privacy-canvas-wrap { display: grid; place-items: center; max-height: 58vh; overflow: auto; border: 1px solid #ccd5e2; border-radius: 12px; background: repeating-conic-gradient(#edf0f5 0% 25%, white 0% 50%) 50% / 18px 18px; touch-action: none; }
+.ai-privacy-canvas { display: block; max-width: 100%; max-height: 58vh; object-fit: contain; cursor: crosshair; touch-action: none; }
+.ai-privacy-tools { display: flex; align-items: center; gap: 12px; color: #647286; font-size: 12px; }
+.ai-privacy-tools button[aria-pressed="true"] { border-color: #1f805d; color: #126447; background: #e9f7f1; }
+.ai-crop-units { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 10px 12px; border: 1px solid #d5deeb; border-radius: 10px; background: #fff; }
+.ai-crop-units > strong { width: 100%; color: #33445c; font-size: 13px; }
+.ai-crop-units label { display: inline-flex; align-items: center; gap: 6px; color: #45556a; font-size: 13px; }
+.ai-crop-units input { width: 16px; height: 16px; }
+.single-identity-bind { flex-wrap: wrap; padding: 10px; border: 1px solid #d8e1ed; border-radius: 10px; background: #f8fafc; }
+.single-identity-bind label { display: grid; gap: 6px; font-size: 12px; }
+.single-identity-bind select { min-width: 220px; }
+.ai-privacy-check { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border-radius: 10px; background: #eaf1fc; line-height: 1.45; }
+.ai-privacy-check input { flex: 0 0 auto; width: 18px; height: 18px; margin-top: 2px; }
+.ai-privacy-card footer { justify-content: flex-end; }
+.ai-payload-prompt { max-height: 28vh; overflow: auto; padding: 12px; border: 1px solid #d5deeb; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; background: white; font: 12px/1.5 ui-monospace, Consolas, monospace; }
+.ai-payload-images { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; max-height: 38vh; overflow: auto; }
+.ai-payload-images figure { margin: 0; padding: 8px; border: 1px solid #d5deeb; border-radius: 10px; background: white; }
+.ai-payload-images img { display: block; width: 100%; max-height: 260px; object-fit: contain; background: #f0f2f6; }
+.ai-payload-images figcaption { padding-top: 6px; color: #59687b; font-size: 11px; }
+.ai-payload-final { max-height: calc(100vh - 24px); overflow: auto; }
+.batch-ai-review-dialog { width: min(1280px, calc(100vw - 20px)); height: min(94vh, 1080px); overflow: hidden; }
+.batch-ai-review-card { display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; }
+.batch-ai-review-card > * { flex-shrink: 0; }
+.batch-ai-review-card > .batch-ai-review-list { flex: 1 1 0; }
+.batch-ai-review-card > header > div { min-width: 0; }
+.batch-ai-template-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid #d7e1ef; border-radius: 10px; background: #eef4ff; color: #28456d; }
+.batch-ai-review-list { min-height: 0; overflow: auto; display: grid; align-content: start; gap: 12px; padding: 2px; }
+.batch-ai-review-item { display: grid; gap: 10px; padding: 12px; border: 1px solid #d5deeb; border-radius: 12px; background: #fff; }
+.batch-ai-review-item > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.batch-ai-review-item > header > div { display: grid; gap: 4px; min-width: 0; }
+.batch-ai-review-item small { color: #637287; overflow-wrap: anywhere; }
+.batch-privacy-status { display: grid; gap: 6px; max-width: 440px; color: #34445a; font-weight: 700; }
+.batch-privacy-status select { width: 100%; min-height: 42px; }
+.batch-ai-warning { color: #8b4b0e; }
+.batch-ai-normal { color: #47705d; }
+.batch-ai-outbound-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+.batch-ai-outbound-image { min-width: 0; margin: 0; padding: 7px; border: 1px solid #d7deea; border-radius: 9px; background: #f7f9fc; }
+.privacy-zoom-trigger { display: grid; place-items: center; width: 100%; min-height: 150px; padding: 0; border: 0; border-radius: 6px; background: #e9edf3; cursor: zoom-in; }
+.privacy-zoom-trigger img { display: block; max-width: 100%; max-height: 290px; object-fit: contain; }
+.batch-ai-outbound-image figcaption { padding-top: 6px; color: #59687b; font-size: 11px; overflow-wrap: anywhere; }
+.privacy-fingerprint { color: #718096; font-size: 11px; }
+.privacy-zoom-dialog { position: fixed; inset: 2vh 2vw; width: 96vw; height: 96vh; max-width: none; max-height: none; padding: 36px 12px 12px; border: 0; border-radius: 14px; background: #f6f8fc; }
+.privacy-zoom-dialog::backdrop { background: rgba(15, 28, 48, .84); }
+.privacy-zoom-dialog img { display: block; width: 100%; height: calc(100% - 26px); object-fit: contain; }
+.privacy-zoom-dialog p { margin: 4px 0 0; text-align: center; color: #59687b; }
+.privacy-zoom-close { position: absolute; top: 6px; right: 8px; }
+.privacy-editor-dialog { width: min(1120px, calc(100vw - 20px)); }
+.privacy-editor-card { max-height: calc(100vh - 20px); overflow: auto; }
+.privacy-editor-card .ai-privacy-tools { flex-wrap: wrap; }
+.batch-ai-confirm { font-weight: 700; }
+@media (max-width: 600px) { .ai-privacy-card { padding: 14px; } .ai-privacy-card footer { justify-content: stretch; } .ai-privacy-card footer button { flex: 1; } }
+@media (max-width: 600px) { .batch-ai-review-dialog { width: calc(100vw - 10px); height: calc(100vh - 10px); max-height: none; } .batch-ai-review-item > header { align-items: flex-start; flex-direction: column; } .batch-ai-outbound-grid { grid-template-columns: repeat(auto-fill, minmax(135px, 1fr)); } .privacy-zoom-trigger { min-height: 120px; } .privacy-zoom-trigger img { max-height: 220px; } }
+.server-managed-settings { opacity: .78; }
+.server-managed-settings #api-key,
+.server-managed-settings .key-storage-options,
+.server-managed-settings button[type="submit"] { display: none !important; }
+.server-managed-settings input,
+.server-managed-settings select,
+.server-managed-settings button { pointer-events: none; }
+
+@media (max-width: 600px) {
+  .batch-ai-review-card { overflow-y: auto; }
+  .batch-ai-review-card > .batch-ai-review-list { flex: none; overflow: visible; }
+  .batch-ai-template-bar > .batch-privacy-status { width: 100%; min-width: 0; }
+  .batch-ai-template-bar > .privacy-bulk-apply { width: 100%; white-space: normal; }
+}
+
+/* Crop verification keeps actions reachable while large batches scroll inside. */
+.formal-crop-review-dialog .batch-ai-review-card { overflow: hidden; }
+.formal-crop-review-dialog .batch-ai-review-list { flex: 1 1 0; overflow: auto; overscroll-behavior: contain; }
+.formal-crop-review-dialog .batch-ai-review-card > footer { flex-wrap: wrap; }

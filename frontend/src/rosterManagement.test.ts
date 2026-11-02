@@ -1,0 +1,8 @@
+import {afterEach,expect,it,vi} from 'vitest'
+import { rosterFile,previewRoster,saveStudent } from './rosterManagement'
+import { setSession } from './api'
+afterEach(()=>{vi.unstubAllGlobals();setSession(null)})
+function mocked(){vi.stubGlobal('window',{location:{origin:'http://127.0.0.1:8765'},dispatchEvent:vi.fn()});vi.stubGlobal('fetch',vi.fn().mockImplementation(()=>Promise.resolve(new Response('{}'))));setSession({required:true,authenticated:true,csrf_token:'synthetic'})}
+it('validates import type and size before reading',async()=>{await expect(rosterFile({name:'x.exe',size:2} as File,'')).rejects.toThrow();await expect(rosterFile({name:'x.csv',size:11*1024*1024} as File,'')).rejects.toThrow();const file={name:'x.csv',size:3,arrayBuffer:async()=>new Uint8Array([65,44,66]).buffer} as File;expect(await rosterFile(file,' 合成班 ')).toEqual({filename:'x.csv',data_url:'data:application/octet-stream;base64,QSxC',default_class_name:'合成班'})})
+it('preview is explicit and does not silently call import',async()=>{mocked();await previewRoster({filename:'x.csv',data_url:'data:text/csv;base64,QQ==',default_class_name:'班'});expect(fetch).toHaveBeenCalledTimes(1);expect(JSON.parse(vi.mocked(fetch).mock.calls[0]![1]!.body as string).preview_only).toBe(true)})
+it('uses an existing student ID for edits and never supplies scoring fields',async()=>{mocked();await saveStudent({student_id:'s'.repeat(32),student_no:'02',display_name:'合成',enabled:false});const body=JSON.parse(vi.mocked(fetch).mock.calls[0]![1]!.body as string);expect(body).toEqual({student_id:'s'.repeat(32),student_no:'02',display_name:'合成',enabled:false});expect(body).not.toHaveProperty('final_total')})
