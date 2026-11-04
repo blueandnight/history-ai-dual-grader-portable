@@ -17,10 +17,18 @@ def observation(source, root):
     return copy.deepcopy(dict(status=source.get('answer_status'),
         confidence=source.get('confidence', root.get('confidence')),
         summary=source.get('summary', ''), criteria=source.get('criteria', []),
+        # The response schema requests a top-level summary, not a per-question
+        # summary. Use it as blank evidence only when every returned question
+        # independently has the canonical blank status.
+        paper_summary=root.get('summary', ''),
+        paper_all_blank=bool(root.get('sub_questions')) and all(
+            isinstance(q, dict) and q.get('answer_status') == 'unanswered_candidate'
+            for q in root.get('sub_questions', [])),
         suggested_total=source.get('suggested_total'), student_answer=source.get('student_answer'),
         blank_evidence=source.get('blank_evidence'),
-        image_readable=source.get('image_readable'), region_complete=source.get('region_complete'),
-        question_matched=source.get('question_matched')))
+        image_readable=False if root.get('image_readable') is False else source.get('image_readable', root.get('image_readable')),
+        region_complete=False if root.get('region_complete') is False else source.get('region_complete', root.get('region_complete')),
+        question_matched=False if root.get('question_matched') is False else source.get('question_matched', root.get('question_matched'))))
 
 
 def definite(q):
@@ -40,13 +48,21 @@ def definite(q):
         return False
     text = str(o.get('summary') or '') + ' ' + json.dumps(o.get('blank_evidence') or '', ensure_ascii=False)
     text += ' ' + ' '.join(str(p.get('reason') or '') for p in criteria)
-    if re.search(r'疑似|可能|似乎|不确定|模糊|缺页|缺失|无法|未匹配|uncertain|maybe|blur|missing|unreadable', text, re.I):
+    paper_summary = str(o.get('paper_summary') or '')
+    if re.search(r'疑似|可能|似乎|不确定|模糊|缺页|缺失|无法|未匹配|不清|不可辨|未拍全|不完整|'
+                 r'(?:不是|并非|非)(?:空白|未作答)|(?<!没)有作答|存在作答|'
+                 r'uncertain|maybe|blur|missing|unreadable|incomplete|failed|cannot|'
+                 r'not\s+(?:blank|empty|clear|readable|fully)', text + ' ' + paper_summary, re.I):
         return False
+    if o.get('paper_all_blank'):
+        text += ' ' + paper_summary
     blank = re.search(r'未作答|没有作答|未书写|确实留白|确认空白|no answer|unanswered|blank', text, re.I)
-    readable = o.get('image_readable') is True or re.search(r'清晰|可辨认|可辨读|readable|clear', text, re.I)
-    complete = o.get('region_complete') is True or re.search(r'区域完整|完整可见|完整答题区域|region.{0,12}complete|fully visible', text, re.I)
+    # The unchanged prompt permits this canonical status only after the model
+    # clearly verifies blankness across the whole paper. Require an explicit
+    # blank statement and both models' agreement, not three magic phrases.
+    # resolve() also requires successful image quality checks and exact IDs.
     # Normalizer adds extra reasons for duplicate/unknown IDs. Never clear those.
-    return bool(blank and readable and complete and len(q.get('block_reasons', [])) == 1)
+    return bool(blank and len(q.get('block_reasons', [])) == 1)
 
 
 def resolve(results, metadata, errors, questions, photos):
@@ -61,7 +77,7 @@ def resolve(results, metadata, errors, questions, photos):
         return results, None
     if any(not m.get('provider') or not m.get('model_id') for m in (a,b)) or (a.get('provider'), a.get('model_id')) == (b.get('provider'), b.get('model_id')):
         return results, None
-    if any(p.get('quality', {}).get('ok') is False for p in photos):
+    if any((p.get('quality') or {}).get('ok') is not True for p in photos):
         return results, None
     wanted = {q['id'] for q in questions}
     maps = []

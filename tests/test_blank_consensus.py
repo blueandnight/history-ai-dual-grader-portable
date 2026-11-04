@@ -46,7 +46,7 @@ class BlankPolicyTests(unittest.TestCase):
         self.assertEqual(receipt['question_ids'],['Q1','Q3'])
 
     def test_uncertain_blur_missing_and_failures_never_zero(self):
-        for text in ('疑似空白，图像清晰，答题区域完整','图像模糊，无法识别','缺页，未作答','未作答'):
+        for text in ('疑似空白，图像清晰，答题区域完整','图像模糊，无法识别','缺页，未作答'):
             raw=copy.deepcopy(self.raw)
             for q in raw['sub_questions']:q['summary']=text
             self.assertIsNone(self.resolve(a=self.normalized(raw),b=self.normalized(raw))[1])
@@ -59,6 +59,42 @@ class BlankPolicyTests(unittest.TestCase):
         self.assertEqual(receipt['question_ids'],['Q1','Q2'])
         self.assertTrue(effective['A']['blocked'])
         self.assertIsNone(effective['A']['sub_questions'][2]['suggested_total'])
+
+    def test_explicit_blank_does_not_require_fixed_quality_phrases(self):
+        for summary in ('本题未作答', '没有作答', 'No answer'):
+            with self.subTest(summary=summary):
+                raw=copy.deepcopy(self.raw)
+                for q in raw['sub_questions']:q['summary']=summary
+                effective,receipt=self.resolve(a=self.normalized(raw),b=self.normalized(raw))
+                self.assertEqual(receipt['question_ids'],['Q1','Q2','Q3'])
+                self.assertFalse(effective['A']['blocked'])
+                self.assertEqual(effective['B']['suggested_total'],0)
+
+    def test_top_level_summary_for_wholly_blank_paper(self):
+        raw=copy.deepcopy(self.raw);raw['summary']='所有小题未作答'
+        for q in raw['sub_questions']:q.pop('summary')
+        effective,receipt=self.resolve(a=self.normalized(raw),b=self.normalized(raw))
+        self.assertEqual(receipt['question_ids'],['Q1','Q2','Q3'])
+        self.assertEqual(effective['A']['suggested_total'],0)
+        # A whole-paper statement cannot fill missing evidence on a mixed paper.
+        raw['sub_questions'][1]=dict(id='Q2',answer_status='answered',criteria=[
+            dict(id='C1',decision='full',suggested_score=2,student_evidence='合成作答')])
+        self.assertIsNone(self.resolve(a=self.normalized(raw),b=self.normalized(raw))[1])
+
+    def test_plain_blank_still_requires_successful_quality_and_no_contradictions(self):
+        raw=copy.deepcopy(self.raw)
+        for q in raw['sub_questions']:q['summary']='本题未作答'
+        for photos in ([{}],[{'quality':{}}],[{'quality':{'ok':False}}]):
+            self.assertIsNone(self.resolve(a=self.normalized(raw),b=self.normalized(raw),photos=photos)[1])
+        for summary in ('图像不清，未作答','答题区域不完整，未作答','not blank','并非空白，不能判断未作答'):
+            raw['summary']=summary
+            self.assertIsNone(self.resolve(a=self.normalized(raw),b=self.normalized(raw))[1])
+        raw.pop('summary')
+        for flag in ('image_readable','region_complete','question_matched'):
+            raw[flag]=False
+            for q in raw['sub_questions']:q[flag]=True
+            self.assertIsNone(self.resolve(a=self.normalized(raw),b=self.normalized(raw))[1])
+            raw.pop(flag)
 
     def test_no_evidence_status_alone_and_alias_not_confirmed(self):
         for change in ({'summary':''},{'confidence':.4},{'answer_status':'blank'}, {'region_complete':False}, {'suggested_total':2}, {'criteria':[{'student_evidence':'存在答案','decision':'full','suggested_score':2}]}):
@@ -82,6 +118,8 @@ class BlankPolicyTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(prompt.encode()).hexdigest(), '5740f7f5497cbbe084eea8ff4776b07c97ceb04780544620d06ae53213ef933c')
 
     def test_actual_dual_entry_and_repeated_scope_projection(self):
+        self.raw['summary']='所有小题未作答'
+        for q in self.raw['sub_questions']:q.pop('summary')
         configs={s:dict(provider=s,model=s) for s in ('A','B')}
         def call(*args):
             args[4].update(input_hash='a'*64,finish_reason='stop')
@@ -109,7 +147,7 @@ class BlankPersistenceTests(unittest.TestCase):
         with closing(app.get_db()) as conn,conn:
             row=teacher_total.read(conn,sid); result=json.loads(row['result_json'])
             questions=self.f.questions
-            raw=dict(confidence=.99,sub_questions=[dict(id=q['id'],answer_status='unanswered_candidate',summary='答题区域完整可见且图像清晰，确认未作答',criteria=[]) for q in questions])
+            raw=dict(confidence=.99,summary='所有小题未作答',sub_questions=[dict(id=q['id'],answer_status='unanswered_candidate',criteria=[]) for q in questions])
             normalized=app.normalize_sub_question_result(raw,questions)
             originals={s:copy.deepcopy(normalized) for s in ('A','B')}
             dual=result['dual_review'];dual['models']={s:dict(status='ok',provider=s,model_id=s,input_hash='a'*64) for s in ('A','B')}
