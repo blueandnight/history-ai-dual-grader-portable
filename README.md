@@ -4,7 +4,7 @@
 
 它可以识别客观题选项，让两个 AI 分别批改历史材料题，再由教师核对、确认或调整成绩。批改后可以查看各题正确率，导出 Excel 或 CSV 成绩表。目前提供 **Windows 便携测试版（Beta）**，解压后即可启动。
 
-**[下载 Windows 便携版（约 111 MB）](https://github.com/blueandnight/history-ai-dual-grader-portable/releases/download/v0.2.2-beta.1/history-ai-dual-grader-windows-x64-v0.2.2-beta.1.zip)**
+**[下载 Windows 便携版（约 111 MB）](https://github.com/blueandnight/history-ai-dual-grader-portable/releases/download/v0.2.2-beta.2/history-ai-dual-grader-windows-x64-v0.2.2-beta.2.zip)**
 
 下载 ZIP → 完整解压 → 双击 `启动批改器.bat` → 在自动打开的浏览器中使用。**不需要另外安装 Python 或 Node.js。**
 
@@ -33,7 +33,7 @@
 
 ## 3. 下载与安装
 
-**普通使用者只需下载上方的“Windows 便携版”。** 当前版本为 `v0.2.2-beta.1`，适用于 64 位 Windows 电脑。
+**普通使用者只需下载上方的“Windows 便携版”。** 当前版本为 `v0.2.2-beta.2`，适用于 64 位 Windows 电脑。
 
 1. 下载 ZIP 文件。
 2. 右键选择解压，将整个文件夹解压到电脑上的可写位置。不要只从压缩包里拖出一个程序，保留 `_internal` 等配套文件。
@@ -94,18 +94,18 @@
 
 ## 6. 当前版本与已知局限
 
-当前版本为 **`v0.2.2-beta.1`，Beta 测试版**。
+当前版本为 **`v0.2.2-beta.2`，Beta 测试版**。
 
 - 已使用合成答卷和模拟模型验证主要操作流程，尚未充分验证真实学生答卷的识别与评分准确率。
 - 程序未做数字签名，不保证兼容全部 Windows 和安全软件环境。
-- 程序内部仍可能显示旧名称及 `0.2.2-beta-dev` 构建标识，这与本次发布使用的既有程序一致。
+- 程序内部仍可能显示旧名称及 `0.2.2-beta.2` 构建标识，这与本次发布使用的既有程序一致。
 - 教师只确认主观题总分时，软件不会据此推算教师确认的小题分数；AI 小题数据会与正式成绩区分。
 
 ## 7. 开发者与开源信息
 
-本公开仓库仅包含 **Windows 便携版相关源码及必要共用模块**。开发者可查看本仓库源码、[当前版本源码](https://github.com/blueandnight/history-ai-dual-grader-portable/archive/refs/tags/v0.2.2-beta.1.zip)及 [Windows 构建说明](INSTALL.md)。
+本公开仓库仅包含 **Windows 便携版相关源码及必要共用模块**。开发者可查看本仓库源码、[当前版本源码](https://github.com/blueandnight/history-ai-dual-grader-portable/archive/refs/tags/v0.2.2-beta.2.zip)及 [Windows 构建说明](INSTALL.md)。
 
-项目采用 [Apache-2.0](LICENSE)，第三方组件适用各自许可。具体范围见 [NOTICE](NOTICE)、[LICENSING.md](LICENSING.md) 和 [第三方许可声明](THIRD_PARTY_NOTICES.md)。[第三方对应源码](https://github.com/blueandnight/history-ai-dual-grader-portable/releases/download/v0.2.2-beta.1/history-ai-dual-grader-third-party-source-v0.2.2-beta.1.zip)与[校验文件](https://github.com/blueandnight/history-ai-dual-grader-portable/releases/download/v0.2.2-beta.1/SHA256SUMS.txt)供开发和核验使用，普通教师无需下载。
+项目采用 [Apache-2.0](LICENSE)，第三方组件适用各自许可。具体范围见 [NOTICE](NOTICE)、[LICENSING.md](LICENSING.md) 和 [第三方许可声明](THIRD_PARTY_NOTICES.md)。[第三方对应源码](https://github.com/blueandnight/history-ai-dual-grader-portable/releases/download/v0.2.2-beta.2/history-ai-dual-grader-third-party-source-v0.2.2-beta.2.zip)与[校验文件](https://github.com/blueandnight/history-ai-dual-grader-portable/releases/download/v0.2.2-beta.2/SHA256SUMS.txt)供开发和核验使用，普通教师无需下载。
 
 **本项目大量使用了 Codex、DeepSeek 等 AI 编程工具进行代码生成、修改、调试和测试，并非全部代码由维护者手工独立编写。** 详细说明见 [AI_DEVELOPMENT.md](AI_DEVELOPMENT.md)。
 
