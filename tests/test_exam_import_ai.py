@@ -89,7 +89,7 @@ class ExamImportAiModuleTests(unittest.TestCase):
         raw = {"objective_questions": [{"question_id": "1", "stem": "题干", "options": dict(A="甲", B="乙", C="丙", D="丁"), "answer": None}]}
         merged, _ = merge_exam_import_ai_result(draft, normalize_exam_import_ai_result(raw))
         self.assertFalse(merged["objective_questions"][0]["needs_teacher_review"])
-        confirmation = {"exam_name": "试卷", "teacher_confirmed": True, "objective_answer_key": {"1": "B"}, "material_questions": []}
+        confirmation = {"exam_name": "试卷", "teacher_confirmed": True, "objective_answer_key": {"1": "B"}, "objective_points": {"1": 3}, "material_questions": []}
         confirmed, _, _ = app._confirmed_import_payload(merged, confirmation)
         self.assertEqual(confirmed["objective_answer_key"], {"1": "B"})
         with self.assertRaisesRegex(ValueError, "尚未确认正确答案"):

@@ -157,6 +157,10 @@ def valid_ai_subscores(result, exam, source_questions, ids):
                     or any(q.get(k) is False for k in ('image_readable', 'region_complete', 'question_matched'))
                     or q.get('answer_status') not in ('answered', 'blank_confirmed')):
                 continue
+            if q.get('scoring_mode')=='holistic' and q['answer_status']=='answered':
+                from holistic_scoring import valid_sub
+                source=next((v for v in source_questions if _question_key(v['id'])==qid),{})
+                if not valid_sub(q,source):continue
             if q['answer_status'] == 'blank_confirmed':
                 from blank_consensus import valid
                 receipt = dual.get('blank_resolution')

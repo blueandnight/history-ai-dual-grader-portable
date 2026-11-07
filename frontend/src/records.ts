@@ -1,7 +1,9 @@
 import { getSession, isOperator, request } from './api'
 import { finalLabel, type Submission } from './history'
 export type PointResult = { criterion_id: string; decision?: string; suggested_score?: number | null; max_score?: number; student_evidence?: string }
-export type QuestionResult = { sub_question_id: string; answer_status?: string;blank_observation?:{summary?:string;confidence?:number}; criteria: PointResult[] }
+export type EssayEvidence={id:string;student_quote:string;location:{photo_index:number;x:number;y:number;width:number;height:number}}
+export type EssayResult={level_id:string|null;dimension_assessments?:{dimension_id:string;judgment:string;reason:string;score?:number;level_id?:string}[];strengths?:string[];weaknesses?:string[];critical_factual_issues?:string[];factual_status:string;constraint_status:string;constraint_reason:string;evidence?:EssayEvidence[]}
+export type QuestionResult = {transcription?:{status:string;summary?:string;review_only?:boolean;lines:{id:string;text:string}[]};block_reasons?:string[];scoring_mode?:string;suggested_total?:number|null;max_total?:number;blocked?:boolean;holistic_result?:EssayResult;holistic_evidence?:EssayEvidence[];holistic_source?:{holistic?:{levels?:{id:string;description:string}[];dimension_definitions?:{id:string;label:string}[]}}; sub_question_id: string; answer_status?: string;blank_observation?:{summary?:string;confidence?:number}; criteria: PointResult[] }
 export type ModelResult = { suggested_total?: number | null; max_total?: number; sub_questions?: QuestionResult[] }
 export type TeacherPoint = { question_id: string; rubric_point_id: string; decision?: string; teacher_decision?: string }
 export type TeacherFinal = { point_decisions?: TeacherPoint[]; teacher_note?: string; final_total?: number; question_subtotals?: {question_id:string;subtotal:number;max_score:number}[] }
@@ -11,7 +13,7 @@ export type ReviewResult = ModelResult & {
   teacher_total_confirmation?: TeacherFinal;confirmation_method?:string;teacher_final?: TeacherFinal;photos_discarded_unconfirmed?:boolean;
   dual_review?: { status?: string; raw_results?: { A?: ModelResult; B?: ModelResult }; results?: { A?: ModelResult; B?: ModelResult };
     models?: { A?: { label?: string; model?: string; status?: string }; B?: { label?: string; model?: string; status?: string } };
-    comparison?: { risk_level?: string; risk_reasons?: string[]; point_comparisons?: PointComparison[] };
+    comparison?: { holistic_comparisons?:{question_id:string;reasons:string[]}[]; risk_level?: string; risk_reasons?: string[]; point_comparisons?: PointComparison[] };
     teacher_final?: TeacherFinal }
 }
 export type Detail = Omit<Submission, 'suggested_total' | 'max_total' | 'grading_scope'> & { assignment_id?:string;exam_id?:string;batch_id?:string|null;class_name?:string;result: ReviewResult;photos?:{image_role?:string}[];manual_reviewed?:boolean;review_note?:string;photos_deleted?:boolean; teacher_scoring_questions?: { id: string; label?: string; question?:string;standard_answer?:string;max_score: number; criteria: { id: string; label?: string; score: number }[] }[] }

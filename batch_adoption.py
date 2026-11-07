@@ -77,7 +77,9 @@ def evaluate(row, api, conn=None):
         raise ValueError('两模型评分输入不一致或无法验证')
     questions, scope = version(row, result, api)
     expected = {(str(q['id']), str(p['id'])): p for q in questions for p in q['criteria']}
-    if not expected:
+    holistic=[q for q in questions if q.get('scoring_mode')=='holistic']
+    ordinary=[q for q in questions if q.get('scoring_mode')!='holistic']
+    if not expected and not holistic:
         raise ValueError('缺少评分点')
     results = dual.get('results') or {}
     a, b = results.get('A') or {}, results.get('B') or {}
@@ -111,7 +113,22 @@ def evaluate(row, api, conn=None):
         decisions.append(dict(question_id=key[0], rubric_point_id=key[1], decision=decision))
     # Reuse the existing capped point calculation; these are AI consensus inputs,
     # not invented teacher judgments. Persist them under consensus_points only.
-    calculated = api.teacher_deterministic_score(questions, decisions)
+    calculated = api.teacher_deterministic_score(ordinary, decisions) if ordinary else dict(final_total=0,question_subtotals=[])
+    if holistic:
+        import holistic_scoring as hs
+        import blank_consensus
+        consensus=[]
+        for question in holistic:
+            x=next(q for q in a['sub_questions'] if q['sub_question_id']==question['id'])
+            y=next(q for q in b['sub_questions'] if q['sub_question_id']==question['id'])
+            blank=blank_consensus.valid(result) and question['id'] in result['dual_review']['blank_resolution']['question_ids'] and all(q.get('answer_status')=='blank_confirmed' and q.get('suggested_total')==0 for q in (x,y))
+            if not blank and (not hs.valid_sub(x,question) or not hs.valid_sub(y,question) or hs.compare(x,y)):
+                raise ValueError('小论文分档结果无效或存在分歧')
+            value=x['suggested_total'];calculated['final_total']+=value
+            calculated['question_subtotals'].append(dict(question_id=question['id'],subtotal=value,max_score=question['max_score']))
+            consensus.append(dict(question_id=question['id'],level_id=(x.get('holistic_result') or {}).get('level_id'),score=value))
+        calculated['consensus_holistic']=consensus
+        calculated['max_score']=scope['scoped_max_score']
     for model in (a, b, result):
         if not same(model.get('suggested_total'), calculated['final_total']) or not same(model.get('max_total'), scope['scoped_max_score']):
             raise ValueError('总分不一致或不能从评分点核实')
@@ -166,7 +183,7 @@ def listing(conn, assignment_id, exam_id, actor, api, batch_id=''):
             results['A'] = result
         try:
             evaluate(row, api, conn)
-            state, reason = 'adoptable', '双模型总分、各小题及评分点一致，门禁通过'
+            state, reason = 'adoptable', '双模型及各小题按其评分方式形成严格共识，门禁通过'
             proofs[row['id']] = {'proof':proof(row), 'exam_id':row['exam_id'] or ''}
         except (ValueError, TypeError, KeyError, AttributeError, OSError) as exc:
             state = 'confirmed' if row['confirmed_at'] and not result.get('teacher_reconfirmation_required') else 'processing' if row['state'] in ('queued','grading') else 'review'
@@ -183,7 +200,7 @@ def listing(conn, assignment_id, exam_id, actor, api, batch_id=''):
                 continue
             sides = [next((p for p in (results.get(s) or {}).get('sub_questions', []) if p.get('sub_question_id') == q.get('sub_question_id')), {}) for s in ('A','B')]
             conflict = any(p.get('question_id') == q.get('sub_question_id') and (p.get('decision_conflict') or p.get('score_conflict')) for p in fresh_points)
-            subs.append({'id':q.get('sub_question_id'), 'max_score':displayed_number(q.get('max_total')), 'a':displayed_number(sides[0].get('suggested_total')), 'b':displayed_number(sides[1].get('suggested_total')), 'blank_candidate':q.get('answer_status')=='unanswered_candidate', 'blank_confirmed':q.get('answer_status')=='blank_confirmed', 'blank_auto':q.get('blank_confirmation_method')=='automatic_blank_zero', 'a_status':sides[0].get('answer_status') or 'missing', 'b_status':sides[1].get('answer_status') or 'missing', 'point_conflict':conflict})
+            subs.append({'scoring_mode':q.get('scoring_mode'), 'level_a':(sides[0].get('holistic_result') or {}).get('level_id'), 'level_b':(sides[1].get('holistic_result') or {}).get('level_id'), 'holistic_reasons':next((r['reasons'] for r in fresh_comparison.get('holistic_comparisons',[]) if r['question_id']==q.get('sub_question_id')),[]), 'id':q.get('sub_question_id'), 'max_score':displayed_number(q.get('max_total')), 'a':displayed_number(sides[0].get('suggested_total')), 'b':displayed_number(sides[1].get('suggested_total')), 'blank_candidate':q.get('answer_status')=='unanswered_candidate', 'blank_confirmed':q.get('answer_status')=='blank_confirmed', 'blank_auto':q.get('blank_confirmation_method')=='automatic_blank_zero', 'a_status':sides[0].get('answer_status') or 'missing', 'b_status':sides[1].get('answer_status') or 'missing', 'point_conflict':conflict})
         models = dual.get('models') if isinstance(dual.get('models'),dict) else {}
         errors = dual.get('errors') if isinstance(dual.get('errors'),dict) else {}
         issues = {s:model_display_issue(models.get(s) if isinstance(models.get(s),dict) else {}, errors.get(s) if isinstance(errors.get(s),dict) else {}) for s in ('A','B')}
@@ -252,7 +269,7 @@ def adopt(conn, body, actor, api):
     for row, result, score, fingerprint in pending:
         timestamp = api.utc_now()
         result['confirmation_method'] = METHOD
-        result['batch_adoption'] = {**score, 'source_fingerprint':fingerprint, 'confirmed_at':timestamp, 'actor':actor, 'policy_version':'exact_point_consensus_v1'}
+        result['batch_adoption'] = {**score, 'source_fingerprint':fingerprint, 'confirmed_at':timestamp, 'actor':actor, 'policy_version':'mixed_mode_consensus_v1' if score.get('consensus_holistic') else 'exact_point_consensus_v1'}
         conn.execute('UPDATE submissions SET result_json=?,final_total=?,confirmed_at=?,teacher_note=? WHERE id=?', (json.dumps(result, ensure_ascii=False), score['final_total'], timestamp, '教师批量采纳 AI 共识，未逐点评阅', row['id']))
         api.append_audit_event(conn, 'submission_batch_adopted', 'submission', row['id'], {'actor':actor, 'exam_id':row['exam_id'], 'final_total':score['final_total'], 'source_fingerprint':fingerprint, 'confirmation_method':METHOD})
     return {'adopted':len(pending), 'reused':reused}
@@ -262,7 +279,7 @@ def confirmed_final(result):
     """Read adopted score metadata without claiming teacher point decisions."""
     if result.get('confirmation_method') == METHOD:
         value = result.get('batch_adoption')
-        return value if isinstance(value, dict) and value.get('policy_version') == 'exact_point_consensus_v1' else {}
+        return value if isinstance(value, dict) and value.get('policy_version') in ('exact_point_consensus_v1','mixed_mode_consensus_v1') else {}
     return None
 
 

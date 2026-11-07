@@ -86,22 +86,25 @@ def _blocks(root: Any, numbering: Any = None) -> list[str]:
                 values = []
                 for cell in row.findall(WORD_NS + "tc"):
                     values.append(" / ".join(
-                        text for text in (paragraph(p) for p in cell.findall(WORD_NS + "p")) if text
+                        text for text in (paragraph(p) for p in cell.iter(WORD_NS + "p")) if text
                     ))
                 if any(values):
                     result.append(" | ".join(values))
     return result
 
 
+QUESTION_PREFIX = r"^[ \t]*(?:第[ \t]*)?(\d{1,3})[ \t]*(?:[．.、]|题[：:]?)[ \t]*"
+
+
 def _question_number(text: str) -> tuple[str, str] | None:
-    match = re.match(r"^\s*(\d{1,3})\s*[．.、]\s*(.*)$", text)
+    match = re.match(QUESTION_PREFIX + r"(.*)$", text, re.S)
     if not match:
         return None
     return match.group(1), match.group(2).strip()
 
 
 def _part_number(text: str) -> re.Match[str] | None:
-    return re.match(r"^\s*[（(](\d{1,2})[）)]\s*(.*)$", text)
+    return re.match(r"^\s*[（(](\d{1,2})[）)]\s*(.*)$", text, re.S)
 
 
 def _score(text: str) -> float | None:
@@ -222,11 +225,15 @@ def build_subquestion_draft(
     rubric_draft: list[dict[str, Any]] | None = None,
     rubric_parse_status: str = "not_generated",
     point_value: float | None = 2,
+    question_context: str = "",
 ) -> dict[str, Any]:
     """Build the additive common sub-question draft shape used by DOCX and PDF imports."""
     parent_id = str(parent_question_id)
     part_id = str(part_number)
     answer = str(reference_answer or "")
+    is_essay = bool(re.search(r"自拟(?:论题|题目)|历史小论文|开放性论述|撰写.{0,8}小论文", str(question_context)+"\n"+str(question_text)))
+    from analytic_draft import extract
+    project_config=extract(answer,max_score) if max_score else None
     return {
         # Existing DOCX grading-draft fields remain intact for the current UI.
         "label": part_id,
@@ -234,15 +241,16 @@ def build_subquestion_draft(
         "standard_answer": answer,
         "max_score": max_score,
         "criteriaText": "",
-        "scoring_mode": "point_bank",
+        "scoring_mode": "holistic" if is_essay or project_config else "point_bank",
+        **({"holistic": project_config or {"levels": [], "dimensions": "", "notes": "请依据原卷评分标准填写档次、评价维度和评分步长；参考范例仅为可能的论证路径。"}} if is_essay or project_config else {}),
         "point_value": point_value,
         "answer_found": bool(answer_found),
         # Additive normalized fields shared with PDF question-draft imports.
         "question_id": f"{parent_id}.{part_id}",
         "parent_question_id": parent_id,
-        "question_type": "subjective",
+        "question_type": "essay" if is_essay else "subjective",
         "reference_answer": answer,
-        "rubric_draft": list(rubric_draft or []),
+        "rubric_draft": [] if is_essay or project_config else list(rubric_draft or []),
         "rubric_parse_status": rubric_parse_status,
         "needs_teacher_confirmation": True,
     }
@@ -251,13 +259,36 @@ def build_subquestion_draft(
 def split_exam_regions(blocks: list[str]) -> tuple[list[str], list[str], list[str]]:
     """Split blocks into (exam questions, blank answer sheet, answer reference).
 
-    The split is driven only by independent section titles. Nothing here depends
+    The split uses independent section titles or explicit inline answer markers. Nothing here depends
     on a file name, a date, or this paper's question numbers. A blank answer sheet
     is kept separate so its empty numbered lines are never imported twice.
     """
     answer_start = next((i for i, block in enumerate(blocks) if ANSWER_SECTION_TITLE_RE.match(block)), None)
     sheet_start = next((i for i, block in enumerate(blocks) if ANSWER_SHEET_TITLE_RE.match(block)), None)
     boundaries = [index for index in (answer_start, sheet_start) if index is not None]
+    # Inline answer headings switch only until the next actual question.
+    # Repeated answer numbers belong to the answer stream, never question IDs.
+    if any(re.match(QUESTION_PREFIX + r"【(?:答案|参考答案)】", b) or re.match(r"^【(?:答案|参考答案)】", b) for b in blocks):
+        exam, sheet, answers = [], [], []
+        mode = 'exam'
+        current = None
+        for block in blocks:
+            numbered = _question_number(block)
+            if ANSWER_SHEET_TITLE_RE.match(block):
+                mode = 'sheet'
+            elif ANSWER_SECTION_TITLE_RE.match(block):
+                mode = 'answer_section'
+            elif numbered and re.match(r"【(?:答案|参考答案)】", numbered[1]):
+                mode = 'answer_section' if mode == 'answer_section' else 'answer'
+            elif numbered and mode != 'answer_section':
+                if not (mode == 'answer' and current and int(numbered[0]) <= int(current)):
+                    mode = 'exam'
+                    current = numbered[0]
+            elif re.match(r"^【(?:答案|参考答案)】", block) and current:
+                mode = 'answer'
+                block = current + '．' + block
+            (sheet if mode == 'sheet' else answers if mode.startswith('answer') else exam).append(block)
+        return exam, sheet, answers
     if not boundaries:
         return blocks, [], []
     exam_blocks = blocks[: min(boundaries)]
@@ -312,7 +343,7 @@ def question_kinds(blocks: list[str]) -> dict[str, str]:
             kinds[number] = "subjective"
         elif sections.get(number):
             kinds[number] = sections[number]
-        elif re.search(r"材料|根据.*(?:概括|分析|指出|说明)|阅读.*(?:回答|要求)", "\n".join(lines)):
+        elif re.search(r"材料|小论文|论述|论证|根据.*(?:概括|分析|指出|说明)|阅读.*(?:回答|要求)", "\n".join(lines)):
             kinds[number] = "subjective"
         elif options:
             kinds[number] = "objective"
@@ -329,8 +360,18 @@ def single_subjective_parts(body: str) -> tuple[str, str]:
     return "", body.strip()
 
 
-def reference_sections(text: str) -> dict[str, dict[str, str]]:
-    starts = list(re.finditer(r"(?m)^\s*(\d{1,3})\s*[．.、]\s*", text))
+def reference_sections(text: str, allowed_numbers=None) -> dict[str, dict[str, str]]:
+    starts = list(re.finditer(QUESTION_PREFIX, text, re.M))
+    if allowed_numbers is not None:
+        starts = [match for match in starts if match.group(1) in allowed_numbers]
+        headings = []
+        for match in starts:
+            remainder = text[match.end():].lstrip()
+            if (headings and int(match.group(1)) < int(headings[-1].group(1))
+                    and not remainder.startswith(('【答案】', '【参考答案】'))):
+                continue  # A numbered reference example is not a new answer heading.
+            headings.append(match)
+        starts = headings
     sections: dict[str, dict[str, str]] = {}
     for index, match in enumerate(starts):
         end = starts[index + 1].start() if index + 1 < len(starts) else len(text)
@@ -338,24 +379,40 @@ def reference_sections(text: str) -> dict[str, dict[str, str]]:
         explicit_answer = re.search(r"【答案】|(?:^|\n)\s*参考答案\s*[：:]", body)
         if explicit_answer:
             body = body[explicit_answer.end():]
-        body = re.split(r"【(?:知识点|详解|分析|解析)】|(?:^|\n)\s*(?:解析|评分标准)\s*[：:]", body, maxsplit=1)[0]
+        # A major-level total often follows 【答案】 before the first subpart.
+        # It must not make a multi-part answer look like one essay example.
+        body = re.sub(r"^\s*[（(]\s*\d+(?:\.\d+)?\s*分\s*[）)]\s*", "", body, count=1)
+        # Keep scoring instructions and all examples with the reference.
+        body = re.split(r"【(?:知识点|详解|分析|解析)】", body, maxsplit=1)[0]
         if re.match(r"\s*(?:解析|【详解】)\s*[：:]?", body) or re.fullmatch(r"\s*[A-D]\s*", body):
             continue
-        parts = list(re.finditer(r"[（(]\s*(\d{1,2})\s*[）)]", body))
+        parts = [] if re.search(r"范例|范文|示例", body) and not re.match(r"\s*[（(]\d+[）)]", body) else list(re.finditer(r"[（(]\s*(\d{1,2})\s*[）)]", body))
+        outer_parts = []
+        for part in parts:
+            if not outer_parts or int(part.group(1)) > int(outer_parts[-1].group(1)):
+                outer_parts.append(part)
+            # Numbering restarted inside a later task's rubric is subordinate
+            # content. Keep its marker/text inside that task, not an earlier one.
+        parts = outer_parts
         answers = {}
         for i, part in enumerate(parts):
             value = body[part.end():parts[i + 1].start() if i + 1 < len(parts) else len(body)].strip(" ：:；;。\t\r\n")
             if value:
-                answers.setdefault(part.group(1), value)
+                key = part.group(1)
+                # A later rubric heading may repeat (2). Keep it with that
+                # same task rather than discard its scoring instructions.
+                answers[key] = '\n'.join(x for x in (answers.get(key, ''), value) if x)
         if not parts and body.strip():
             answers["1"] = body.strip(" ：:；;。\t\r\n")
         if answers:
-            sections[match.group(1)] = answers
+            existing = sections.setdefault(match.group(1), {})
+            for part_id, value in answers.items():
+                existing[part_id] = '\n'.join(x for x in (existing.get(part_id, ''), value) if x)
     return sections
 
 
-def _answer_map(blocks: list[str]) -> dict[tuple[str, str], str]:
-    return {(number, part): answer for number, parts in reference_sections("\n".join(blocks)).items() for part, answer in parts.items()}
+def _answer_map(blocks: list[str], allowed_numbers=None) -> dict[tuple[str, str], str]:
+    return {(number, part): answer for number, parts in reference_sections("\n".join(blocks), allowed_numbers).items() for part, answer in parts.items()}
 
 
 def extract_docx_plain_text(data: bytes) -> str:
@@ -418,7 +475,7 @@ def parse_docx(data: bytes) -> dict[str, Any]:
     }
     groups = _question_groups(exam_blocks)
     kinds = question_kinds(exam_blocks)
-    answers = _answer_map(answer_blocks)
+    answers = _answer_map(answer_blocks, set(groups))
     material_questions: list[dict[str, Any]] = []
     for number, lines in groups.items():
         if kinds[number] != "subjective":
@@ -432,7 +489,7 @@ def parse_docx(data: bytes) -> dict[str, Any]:
                 part_starts.append((offset, int(match.group(1)), match.group(2)))
             offset += len(line) + 1
         if not part_starts:
-            body = re.sub(r"^\s*\d{1,3}\s*[．.、]\s*", "", text, count=1)
+            body = re.sub(QUESTION_PREFIX, "", text, count=1)
             major_prompt, task = single_subjective_parts(body)
             lines = [major_prompt, "（1）" + task]
             text = "\n".join(lines)
@@ -444,13 +501,14 @@ def parse_docx(data: bytes) -> dict[str, Any]:
             part_text = text[start:end].strip()
             match = _part_number(part_text)
             question_text = (match.group(2) if match else first_line).strip()
-            max_score = _score(question_text) or _score(part_text)
+            max_score = _score(question_text) or _score(part_text) or (_score(major_prompt) if len(part_starts) == 1 else None)
             reference_answer = answers.get((number, str(part_no)), "")
             rubric_draft, rubric_parse_status = rubric_candidates_from_reference(f"{number}.{part_no}", reference_answer) if reference_answer else ([], "needs_teacher_review")
             subquestions.append(build_subquestion_draft(
                 parent_question_id=number,
                 part_number=str(part_no),
                 question_text=question_text,
+                question_context=major_prompt if len(part_starts)==1 else "",
                 reference_answer=reference_answer,
                 max_score=max_score,
                 answer_found=(number, str(part_no)) in answers,
@@ -531,6 +589,8 @@ def parse_docx(data: bytes) -> dict[str, Any]:
         "warning_codes": list(dict.fromkeys(warning_codes)),
         "warnings": warnings
         + (["导入内容是待核对草稿；评分点不会由解析器自动编造，候选 rubric 不含分值，未判定同义点、封顶或重复给分规则。"] if material_questions else ["未识别到可导入的编号材料题小题，请检查文档排版。"]),
+        "source_blocks": blocks,
+        "source_tables": [[[ _paragraph_text(cell) for cell in row.findall(WORD_NS+"tc")] for row in table.findall(WORD_NS+"tr")] for table in root.iter(WORD_NS+"tbl")],
         "source_block_count": len(blocks),
         "source_regions": source_regions,
     }

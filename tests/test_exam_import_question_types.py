@@ -37,7 +37,7 @@ class GenericExamQuestionTypeTests(unittest.TestCase):
         self.assertEqual([s['max_score'] for s in subs], [8, 8])
         self.assertTrue(all(s['answer_found'] and s['needs_teacher_confirmation'] for s in subs))
         self.assertNotIn('不是答案', subs[1]['reference_answer'])
-        self.assertNotIn('评分标准', subs[1]['reference_answer'])
+        self.assertIn('评分标准', subs[1]['reference_answer'])  # Keep the source scoring instruction for teacher editing.
         self.assertNotIn('不应成为参考答案', subs[0]['reference_answer'])
         self.assertTrue(all(p['score'] is None for s in subs for p in s['rubric_draft']))
 

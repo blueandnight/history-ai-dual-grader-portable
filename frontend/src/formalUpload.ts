@@ -6,7 +6,7 @@ export type CropRun = { status:string;failure_code?:string;alignment_assisted?:b
 export type Accepted = { question_id:string;layout_profile_id:string;data_url:string;attestation:string;provenance:{exam_id:string} }
 export type Region = {region_id:string;profile_id:string;photo_index:number;x:number;y:number;width:number;height:number;sub_question_ids:string[];coordinate_system:string;rotation_ccw:number;invocation_scope:string}
 export type Photo = { name:string;page_sequence:number;data_url:string;original_data_url:string;image_role:string;answer_region_attestation:string;ai_redactions:unknown[];corners?:unknown }
-export type Preview = { blocked?:boolean;preview_token:string;preview_fingerprint:string;prompt:string;region_prompts?:{label:string;prompt:string}[];images:{data_url:string;image_kind?:string;sub_question_ids:string[]}[];answer_regions:Region[];provider?:string;model?:string }
+export type Preview = { blocked?:boolean;preview_token:string;preview_fingerprint:string;prompt:string;estimated_model_requests?:number;region_prompts?:{label:string;prompt:string}[];images:{data_url:string;image_kind?:string;sub_question_ids:string[]}[];answer_regions:Region[];provider?:string;model?:string }
 export type GradingInputMode = 'auto_crop'|'original_photo'
 export function anonymousExamCandidates(a:FormalAssignment,mode:GradingInputMode){
   return (mode==='original_photo'?a.original_photo_exams:a.layout_exams)||[]

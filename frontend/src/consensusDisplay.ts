@@ -1,4 +1,4 @@
-export type Question={id:string;max_score:number|null;a:number|null;b:number|null;point_conflict:boolean;blank_candidate?:boolean;blank_confirmed?:boolean;blank_auto?:boolean;a_status?:string;b_status?:string}
+export type Question={scoring_mode?:string;level_a?:string;level_b?:string;holistic_reasons?:string[];id:string;max_score:number|null;a:number|null;b:number|null;point_conflict:boolean;blank_candidate?:boolean;blank_confirmed?:boolean;blank_auto?:boolean;a_status?:string;b_status?:string}
 export type Paper={id:string;exam_id:string;sequence?:number|null;label:string;state:string;progress_state?:string;reason:string;a:number|null;b:number|null;names:{A:string;B:string};max_score:number|null;questions:Question[];evidence_only?:boolean;model_issues?:{A:string;B:string};totals_complete?:{A:boolean;B:boolean};confirmation_method?:string;final_total?:number|null}
 const finite=(v:unknown):v is number=>typeof v==='number'&&Number.isFinite(v)
 export function visibleTotal(p:Paper,side:'A'|'B'){
@@ -11,7 +11,9 @@ export function answerNote(status?:string,confirmed=false){
  return ({unanswered_candidate:'疑似空白，待教师确认',question_unmatched:'题号未匹配，待核对',image_unreadable:'图像无法可靠读取',missing:'未获得小题评分',blank_confirmed:'已确认空白'} as Record<string,string>)[status||'']||''
 }
 export function difference(a:number|null,b:number|null,conflict=false){return !finite(a)||!finite(b)?'结果不完整':a===b?(conflict?'同分，评分点判断不同':'一致'):`相差 ${Math.abs(a-b)} 分`}
+export function holisticReason(reason:string){return ({holistic_transcription_disagreement:'两模型转写不同，需核对原卷',holistic_invalid_result:'分档结果待核对',holistic_level_disagreement:'跨档分歧',holistic_score_disagreement:'档内分数不同',holistic_key_judgment_disagreement:'关键史实或设问判断不同',holistic_dimension_disagreement:'评价维度判断不同',holistic_fact_judgment_disagreement:'关键史实核对不同'} as Record<string,string>)[reason]||reason}
 export function questionDifference(q:Question,confirmed=false){
+ if(q.scoring_mode==='holistic')return q.holistic_reasons?.length?q.holistic_reasons.map(holisticReason).join('；'):'分档判断一致'
  if(confirmed&&(!finite(q.a)||!finite(q.b)||[q.a_status,q.b_status].some(s=>['unanswered_candidate','question_unmatched','image_unreadable','missing'].includes(s||''))))return '原AI结果不完整'
  if(q.blank_auto)return '双模型明确空白，自动0分'
  if(q.blank_confirmed)return '空白已核对；保留原AI判断'
@@ -42,6 +44,7 @@ export function compactReason(p:Paper){
  if(issues.length)return issues.join('、')
  const problems=p.questions.flatMap(q=>{
   const id=shortQuestion(q.id),states=[q.a_status,q.b_status]
+  if(q.scoring_mode==='holistic'&&q.holistic_reasons?.length)return q.holistic_reasons.map(r=>id+holisticReason(r))
   if(q.blank_auto)return []
   if(q.blank_confirmed)return [id+'空白已核对，待终评']
   if(states.includes('unanswered_candidate'))return [id+'疑似空白']
@@ -55,7 +58,7 @@ export function compactReason(p:Paper){
  return problems.length>1?`${problems.length}处待核对`:problems[0]||'证据或评分状态待核对'
 }
 export function compactQuestionScore(q:Question,side:'a'|'b'){
- if(finite(q[side]))return String(q[side])
+ if(finite(q[side]))return String(q[side])+(q.scoring_mode==='holistic'?' · '+((side==='a'?q.level_a:q.level_b)||'—'):'')
  if(q.blank_confirmed&&q[side==='a'?'a_status':'b_status']==='unanswered_candidate')return '原疑似空白'
  return ({unanswered_candidate:'待确认',question_unmatched:'未匹配',image_unreadable:'看不清'} as Record<string,string>)[q[side==='a'?'a_status':'b_status']||'']||'—'
 }

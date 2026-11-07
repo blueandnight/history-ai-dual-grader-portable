@@ -70,6 +70,12 @@ def prepare(conn, row, api):
             valid = False
         scores = []
         for q in values:
+            if q.get('scoring_mode')=='holistic':
+                from holistic_scoring import valid_sub
+                question=next((v for v in questions if _question_key(v['id'])==_question_key(q.get('sub_question_id'))),{})
+                if not valid_sub(q,question):
+                    from blank_consensus import valid as valid_blank
+                    if not (q.get('answer_status')=='blank_confirmed' and q.get('suggested_total')==0 and valid_blank(result)):valid=False
             value = q.get('suggested_total')
             qmax = question_maxima.get(_question_key(q.get('sub_question_id') or q.get('question_id')), -1)
             if type(value) not in (int,float) or not math.isfinite(value) or not 0 <= value <= qmax or q.get('answer_status') in ('unanswered_candidate','missing','question_unmatched','image_unreadable','uncertain_candidate'):

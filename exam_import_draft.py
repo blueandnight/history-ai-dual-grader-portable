@@ -392,7 +392,7 @@ def build_exam_import_draft(
             sub["reference_answer"] = candidate["reference_answer"]
             sub["standard_answer"] = candidate["standard_answer"]
             sub["answer_found"] = True
-            sub["rubric_draft"] = candidate["rubric_draft"]
+            sub["rubric_draft"] = [] if sub.get("scoring_mode")=="holistic" else candidate["rubric_draft"]
             sub["rubric_parse_status"] = candidate["rubric_parse_status"]
             supplemented.append(sub.get("question_id"))
         if supplemented:

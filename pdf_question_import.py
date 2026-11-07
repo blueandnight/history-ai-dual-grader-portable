@@ -16,7 +16,7 @@ from docx_question_import import (
     ANSWER_SECTION_TITLE_RE, ANSWER_SHEET_TITLE_RE,
     build_subquestion_draft, rubric_candidates_from_reference,
     question_kinds, reference_sections, single_subjective_parts, SECTION_RE,
-    strip_section_headings,
+    strip_section_headings, QUESTION_PREFIX,
 )
 
 MAX_PDF_BYTES = 50 * 1024 * 1024
@@ -24,7 +24,7 @@ PAGE_HEADER_RE = re.compile(
     r"历史(?:试卷|答案)第\s*\d+\s*页\s*[，,]\s*共\s*\d+\s*页"
     r"|(?m:^\s*第\s*\d+\s*页\s*$)"
 )
-QUESTION_START_RE = re.compile(r"(?m)^[ \t]*(\d{1,3})\s*[．.、]\s*")
+QUESTION_START_RE = re.compile(QUESTION_PREFIX, re.M)
 OPTION_MARKER_RE = re.compile(r"(?<![A-Za-z])([A-D])\s*[．.、]\s*")
 PART_START_RE = re.compile(r"(?m)^[ \t]*[（(]\s*(\d{1,2})\s*[）)]\s*")
 ANSWER_TABLE_RE = re.compile(

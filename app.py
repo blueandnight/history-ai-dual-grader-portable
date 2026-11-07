@@ -4096,6 +4096,12 @@ def clean_sub_questions(
         label = str(item.get("label") or f"（{index}）").strip()
         question = str(item.get("question", "")).strip()
         standard_answer = str(item.get("standard_answer", "")).strip()
+        if item.get('scoring_mode') == 'holistic':
+            from holistic_draft import validate
+            config = validate(item.get('holistic'), item.get('max_score'))
+            sub_questions.append(dict(id=sub_id, label=label, question=question, standard_answer=standard_answer,
+                criteria=[], max_score=float(item['max_score']), scoring_mode='holistic', holistic=config))
+            continue
         criteria = clean_criteria(item.get("criteria", []))
         explicit_scoring_mode = item.get("scoring_mode") not in (None, "") or item.get("score_mode") not in (None, "")
         scoring_mode = str(item.get("scoring_mode", item.get("score_mode", "weighted"))).strip().casefold()
@@ -5352,6 +5358,13 @@ def _map_crop_evidence_box(evidence: dict[str, Any], region: dict[str, Any], cro
 
 def map_crop_evidence_to_source(result: dict[str, Any], answer_regions: list[dict[str, Any]]) -> None:
     """Map crop-relative evidence or mark full-page evidence coordinates."""
+    for question in result.get('sub_questions',[]):
+        if question.get('scoring_mode')=='holistic':
+            question['holistic_evidence']=copy.deepcopy((question.get('holistic_result') or {}).get('evidence',[]))
+            for ev in question['holistic_evidence']:
+                box=ev['location'];index=int(box['photo_index'])-1
+                if answer_regions and 0<=index<len(answer_regions):_map_crop_evidence_box(box,answer_regions[index],index)
+                elif not answer_regions:box.update(coordinate_system='perspective_corrected_page_normalized',source='full_page')
     if not answer_regions:
         # The model saw the complete perspective-corrected page, so its normalized
         # evidence coordinates already refer to that page and must be preserved.
@@ -6299,6 +6312,40 @@ def build_vision_prompt_text(
     )
 
 
+def build_scoring_prompt_text(*args, **kwargs):
+    from holistic_scoring import build_prompt
+    return build_prompt(build_vision_prompt_text, *args, **kwargs)
+
+
+def _call_mixed_vision(assignment,questions,answer_text,paths,diagnostics,photos,privacy_confirmed,regions,anonymous_mode,mapping,model_config,diagnostic_run,invocation_scope):
+    import holistic_scoring as hs
+    privacy=cloud_mode_enabled() or anonymous_mode
+    plan=build_scoring_prompt_text(str(assignment['question']),questions,answer_text,privacy_mode=privacy,answer_regions=regions or None,question_mapping=mapping)
+    plan_hash=hashlib.sha256(plan.encode()).hexdigest()
+    if privacy and (not privacy_confirmed or len(paths)!=len(photos or []) or any(p.get('approved_prompt_sha256')!=plan_hash for p in photos or [])):
+        raise ValueError('混合评分计划与已确认隐私预览不一致')
+    outputs=[];runs=[]
+    for group in hs.groups(questions):
+        selected=hs.regions_for(regions,group)
+        text=build_scoring_prompt_text(str(assignment['question']),group,answer_text,privacy_mode=privacy,answer_regions=selected or None,question_mapping=mapping)
+        group_hash=hashlib.sha256(text.encode()).hexdigest()
+        # Derive subrequest hashes only after authenticating the complete plan.
+        group_photos=[{**p,'approved_prompt_sha256':group_hash} for p in photos or []]
+        group_regions=[{**r,'approved_prompt_sha256':group_hash} for r in selected]
+        detail={}
+        output=call_vision_model(assignment,group,answer_text,paths,detail,group_photos,privacy_confirmed,group_regions,anonymous_mode,mapping,model_config,diagnostic_run,invocation_scope)
+        outputs.append(output);runs.append(dict(question_ids=[q['id'] for q in group],**detail))
+    by_id={q['sub_question_id']:q for output in outputs for q in output['sub_questions']}
+    combined=dict(outputs[0]);combined.update(sub_questions=[by_id[q['id']] for q in questions],
+        suggested_total=sum(o['suggested_total'] for o in outputs),max_total=sum(o['max_total'] for o in outputs),
+        requires_question_mapping=any(o.get('requires_question_mapping') for o in outputs),blocked=any(o.get('blocked') for o in outputs),needs_review=any(o.get('needs_review') for o in outputs),
+        block_reasons=sorted({r for o in outputs for r in o.get('block_reasons',[])}),
+        unmapped_answers=[r for o in outputs for r in o.get('unmapped_answers',[])])
+    diagnostics.update(prompt_version='mixed-grading-v1',prompt_hash=plan_hash,input_hash=hs.digest([r.get('input_hash') for r in runs]),
+        question_runs=runs,status='ok',request_count=len(runs),finish_reason=[r.get('finish_reason') for r in runs])
+    return combined
+
+
 def _canonical_ai_redactions(photos: list[dict[str, Any]]) -> list[list[dict[str, float]]]:
     return [normalize_ai_redactions(item.get("ai_redactions", [])) for item in photos]
 
@@ -6309,7 +6356,7 @@ def _ai_prompt_fingerprint(
     answer_regions: list[dict[str, Any]] | None = None,
     question_mapping: list[dict[str, Any]] | None = None,
 ) -> str:
-    prompt = build_vision_prompt_text(
+    prompt = build_scoring_prompt_text(
         question, sub_questions, privacy_mode=True, answer_regions=answer_regions,
         question_mapping=question_mapping,
     )
@@ -6632,7 +6679,7 @@ def _verify_ai_preview_token(
         })
         item["_verified_ai_model_sha256"] = model_sha256
         item["_verified_ai_prompt_sha256"] = hashlib.sha256(
-            build_vision_prompt_text(
+            build_scoring_prompt_text(
                 question, sub_questions, privacy_mode=True,
                 answer_regions=normalized_regions or None,
                 question_mapping=question_mapping,
@@ -6651,7 +6698,7 @@ def _verify_ai_preview_token(
             selected_questions = [item for item in sub_questions if str(item.get("id")) in ids]
             if len(selected_questions) != 1:
                 raise ValueError("逐小题答案区域必须且只能关联一道小题")
-            region_prompt_hash = hashlib.sha256(build_vision_prompt_text(
+            region_prompt_hash = hashlib.sha256(build_scoring_prompt_text(
                 str(selected_questions[0].get("question") or ""), selected_questions, privacy_mode=True, answer_regions=[region],
             ).encode("utf-8")).hexdigest()
             region["approved_prompt_sha256"] = region_prompt_hash
@@ -6705,6 +6752,11 @@ def call_vision_model(
     diagnostic_run: bool = False,
     invocation_scope: str = "whole_paper",
 ) -> dict[str, Any]:
+    from holistic_draft import require_supported
+    require_supported(sub_questions)
+    from holistic_scoring import groups
+    if len(groups(sub_questions))>1:
+        return _call_mixed_vision(assignment,sub_questions,answer_text,photo_paths,diagnostics if diagnostics is not None else {},photo_meta,privacy_confirmed,answer_regions,anonymous_mode,question_mapping,model_config_override,diagnostic_run,invocation_scope)
     model_call_started_at = time.perf_counter()
     call_diagnostics = diagnostics if diagnostics is not None else {}
     if diagnostic_run and cloud_mode_enabled():
@@ -6728,7 +6780,7 @@ def call_vision_model(
     invocation_scope = str(invocation_scope or "whole_paper").strip()
     if invocation_scope not in INVOCATION_SCOPES:
         raise ValueError("模型调用范围无效")
-    prompt_text = build_vision_prompt_text(
+    prompt_text = build_scoring_prompt_text(
         str(assignment["question"]),
         sub_questions,
         answer_text,
@@ -6748,7 +6800,9 @@ def call_vision_model(
             actual_prompt_hash, next(iter(expected_prompt_hashes))
         ):
             raise ValueError("云端批改提示词已偏离教师确认的 AI Payload，已阻止模型请求")
-    user_content: list[dict[str, Any]] = [{"type": "text", "text": prompt_text}]
+    grounded = bool(sub_questions and sub_questions[0].get("scoring_mode") == "holistic")
+    essay_plan = json.loads(prompt_text) if grounded else None
+    user_content: list[dict[str, Any]] = [{"type": "text", "text": essay_plan["transcription_prompt"] if grounded else prompt_text}]
     model_photo_bytes = 0
     page_image_bytes: list[bytes] = []
     for index, path in enumerate(photo_paths):
@@ -6875,7 +6929,7 @@ def call_vision_model(
         "model_id": model,
         "invocation_scope": invocation_scope,
         "input_hash": input_hash,
-        "prompt_version": VISION_PROMPT_VERSION,
+        "prompt_version": sub_questions[0]["holistic"].get("scoring_version", "holistic-essay-grading-v1") if sub_questions and sub_questions[0].get("scoring_mode")=="holistic" else VISION_PROMPT_VERSION,
         "prompt_hash": prompt_hash,
         "diagnostic_run": bool(diagnostic_run),
         "diagnostic_artifact_id": call_id if private_artifact_dir is not None else None,
@@ -6899,6 +6953,9 @@ def call_vision_model(
     raw_capture: dict[str, Any] = {}
     parser_output = None
     normalized = None
+    transcribed = None
+    transcription_text = None
+    response_stage = "request_or_response"
     stage_error = None
 
     def persist_artifact() -> None:
@@ -6929,6 +6986,8 @@ def call_vision_model(
             "parser_input": raw_capture.get("parser_input"),
             "parser_output": parser_output,
             "normalized_result": normalized,
+            "transcription": transcribed,
+            "transcription_response": transcription_text,
             "stage_presence": {
                 "raw_question_ids": _raw_text_sub_question_ids(content or ""),
                 "parser_question_ids": _response_sub_question_ids(parser_output),
@@ -6948,11 +7007,37 @@ def call_vision_model(
                 raise
 
     try:
-        with open_model_request(request, timeout=timeout) as response:
-            content = read_model_chat_content(response, call_diagnostics, raw_capture)
+        if grounded:
+            from open_response_grounding import readable_inputs, transcriptions
+            recognition_diagnostics = {}
+            response_stage = "transcription"
+            with open_model_request(request, timeout=timeout) as response:
+                transcription_text = read_model_chat_content(response, recognition_diagnostics)
+            call_diagnostics['transcription_finish_reason'] = recognition_diagnostics.get('finish_reason')
+            if recognition_diagnostics.get('finish_reason') in ('length', 'content_filter'):
+                raise ValueError('开放题转写被截断或过滤，请核对原图')
+            transcribed = transcriptions(extract_json(transcription_text), sub_questions, len(outbound_images))
+            readable = readable_inputs(transcribed)
+            if readable:
+                response_stage = 'transcript_scoring'
+                score_text = essay_plan['scoring_prompt'] + '\n本次可评分转写：' + json.dumps(readable, ensure_ascii=False)
+                score_payload = {**payload, 'messages': [payload['messages'][0], {
+                    'role': 'user', 'content': [{'type': 'text', 'text': score_text}]
+                }]}
+                request = Request(endpoint, data=json.dumps(score_payload, ensure_ascii=False).encode('utf-8'), headers=headers, method='POST')
+                with open_model_request(request, timeout=timeout) as response:
+                    content = read_model_chat_content(response, call_diagnostics, raw_capture)
+            else:
+                content = '{"sub_questions":[]}'
+                call_diagnostics.update(recognition_diagnostics)
+        else:
+            with open_model_request(request, timeout=timeout) as response:
+                content = read_model_chat_content(response, call_diagnostics, raw_capture)
     except Exception as exc:
         call_diagnostics["provider_error_summary"] = classify_model_error(exc)
-        stage_error = {"stage": "request_or_response", **classify_model_error(exc)}
+        stage_error = {"stage": response_stage, **classify_model_error(exc)}
+        if response_stage == "transcription" and isinstance(exc, ValueError):
+            stage_error["validation_detail"] = str(exc)[:250]
         persist_artifact()
         raise
 
@@ -6965,7 +7050,8 @@ def call_vision_model(
         raise
 
     try:
-        parser_output = validate_grading_response(parser_output)
+        if not any(q.get("scoring_mode")=="holistic" for q in sub_questions):
+            parser_output = validate_grading_response(parser_output)
         call_diagnostics["schema_validation"] = "passed"
     except Exception as exc:
         stage_error = {"stage": "schema_validation", "exception_type": type(exc).__name__, "message": str(exc)[:500]}
@@ -6974,7 +7060,11 @@ def call_vision_model(
         raise
 
     try:
-        normalized = normalize_sub_question_result(parser_output, sub_questions, len(photo_paths))
+        if grounded:
+            from open_response_grounding import normalize_grounded
+            normalized = normalize_grounded(parser_output, sub_questions, transcribed, len(outbound_images))
+        else:
+            normalized = normalize_sub_question_result(parser_output, sub_questions, len(photo_paths))
         if anonymous_mode:
             map_crop_evidence_to_source(normalized, normalized_regions)
         if privacy_mode:
@@ -7279,8 +7369,17 @@ def compare_dual_review_results(result_a: dict[str, Any], result_b: dict[str, An
         ):
             high = True
             reasons.add("model_result_requires_review")
+    import holistic_scoring as hs
+    ha={q['sub_question_id']:q for q in result_a.get('sub_questions',[]) if q.get('scoring_mode')=='holistic'}
+    hb={q['sub_question_id']:q for q in result_b.get('sub_questions',[]) if q.get('scoring_mode')=='holistic'}
+    holistic_comparisons=[]
+    for qid in sorted(set(ha)|set(hb)):
+        issues=hs.compare(ha.get(qid,{}),hb.get(qid,{}))
+        if issues:high=True;reasons.update(issues)
+        holistic_comparisons.append(dict(question_id=qid,reasons=issues,level_a=(ha.get(qid,{}).get('holistic_result') or {}).get('level_id'),level_b=(hb.get(qid,{}).get('holistic_result') or {}).get('level_id')))
     risk_level = "HIGH" if high else "MEDIUM" if medium else "LOW" if low else "NO_CONFLICT"
     return {
+        "holistic_comparisons": holistic_comparisons,
         "risk_level": risk_level,
         "review_reasons": sorted(reasons),
         "point_comparisons": point_comparisons,
@@ -7512,7 +7611,7 @@ def _grade_dual_answer_regions_for_side(
         "question_errors": question_errors,
         "input_hash": hashlib.sha256(json.dumps(usable_hashes, separators=(",", ":")).encode()).hexdigest(),
         "prompt_hash": hashlib.sha256(json.dumps(usable_prompts, separators=(",", ":")).encode()).hexdigest(),
-        "prompt_version": question_runs[0].get("prompt_version") if question_runs else VISION_PROMPT_VERSION,
+        "prompt_version": ('mixed-grading-v1' if len({r.get('prompt_version') for r in question_runs})>1 else question_runs[0].get('prompt_version')) if question_runs else VISION_PROMPT_VERSION,
         "token_usage": token_usage,
         "request_metadata": {
             "invocation_scope": "answer_region",
@@ -7561,6 +7660,8 @@ def grade_submission_dual(
 ) -> dict[str, Any]:
     """Run the selected DeepSeek/MiMo pair independently on identical canonical input."""
     scoped_questions, scope_metadata = resolve_grading_scope(sub_questions, answer_regions)
+    from holistic_draft import require_supported
+    require_supported(scoped_questions)
     configs = load_dual_review_model_configs()
     side_results: dict[str, dict[str, Any]] = {}
     side_diagnostics: dict[str, dict[str, Any]] = {side: {} for side in configs}
@@ -7773,6 +7874,8 @@ def grade_submission(
     question_mapping: list[dict[str, Any]] | None = None,
     dual_review_enabled: bool = False,
 ) -> dict[str, Any]:
+    from holistic_draft import require_supported
+    require_supported(sub_questions)
     started_at = time.perf_counter()
     if dual_review_enabled:
         model_diagnostics: dict[str, Any] = {}
@@ -8141,20 +8244,15 @@ def _confirmed_import_payload(draft: dict[str, Any], confirmation: dict[str, Any
         raise ValueError("主观题确认内容格式无效")
     if any(not isinstance(major, dict) for major in submitted_majors):
         raise ValueError("主观题确认内容格式无效")
-    original_ids = [str(sub.get("question_id", "")) for sub in original_subs]
-    submitted_subs = [
-        sub for major in submitted_majors if isinstance(major, dict)
-        for sub in major.get("sub_questions", []) if isinstance(sub, dict)
-    ]
-    submitted_by_id = {str(sub.get("question_id", "")): sub for sub in submitted_subs}
-    if len(submitted_by_id) != len(submitted_subs) or set(submitted_by_id) != set(original_ids):
-        raise ValueError("主观题小题结构发生变化；请保留导入的所有小题")
-    if not objective_questions and not original_subs:
-        raise ValueError("草稿中没有可创建的题目")
+    from draft_structure import normalize_majors
+    submitted_majors = normalize_majors(submitted_majors, draft.get("material_questions", []))
+    submitted_subs = [sub for major in submitted_majors for sub in major['sub_questions']]
+    submitted_by_id = {sub['question_id']: sub for sub in submitted_subs}
 
     from unified_exam import confirmed_objectives
     objective_rows = confirmed_objectives(objective_questions, final_key, confirmation.get("objective_points", {}))
     confirmed_draft = copy.deepcopy(draft)
+    confirmed_draft["material_questions"] = copy.deepcopy(submitted_majors)
     confirmed_draft["title"] = exam_name
     confirmed_draft["objective_answer_key"] = final_key
     confirmed_draft["objective_points"] = {r["original_question_id"]: r["points"] for r in objective_rows}
@@ -8182,7 +8280,7 @@ def _confirmed_import_payload(draft: dict[str, Any], confirmation: dict[str, Any
             edited = submitted_by_id[question_id]
             question_text = str(edited.get("question", "")).strip()
             reference_answer = str(edited.get("reference_answer", "")).strip()
-            if not question_text or not reference_answer:
+            if not question_text or (not reference_answer and edited.get("scoring_mode") != "holistic"):
                 raise ValueError(f"{question_id} 的设问和参考答案不能为空")
             try:
                 max_score = float(edited.get("max_score"))
@@ -8190,6 +8288,19 @@ def _confirmed_import_payload(draft: dict[str, Any], confirmation: dict[str, Any
                 raise ValueError(f"{question_id} 未填写有效满分") from exc
             if not math.isfinite(max_score) or max_score <= 0:
                 raise ValueError(f"{question_id} 未填写有效满分")
+            if edited.get('scoring_mode') == 'holistic':
+                from holistic_draft import validate
+                holistic = validate(edited.get('holistic'), max_score)
+                preserved = {**original, 'reference_answer': reference_answer, 'standard_answer': reference_answer,
+                    'max_score': max_score, 'scoring_mode': 'holistic', 'holistic': holistic,
+                    'rubric_draft': [], 'needs_teacher_confirmation': False}
+                major['sub_questions'].append(preserved)
+                context = major.get('prompt', '')
+                official_sub_questions.append(dict(id='Q'+question_id, label=question_id,
+                    question=context+'\n'+question_text, standard_answer=reference_answer, criteria=[],
+                    max_score=max_score, scoring_mode='holistic', holistic=holistic))
+                point_warnings.append(question_id+'：开放题评价标准已保存，实际评分按教师确认的计分方式执行')
+                continue
             raw_points = edited.get("rubric_draft", [])
             if not isinstance(raw_points, list) or not raw_points:
                 raise ValueError(f"{question_id} 至少需要一个评分点")
@@ -8511,7 +8622,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     assignment["import_metadata_json"], sub_questions,
                     [str(item["question_id"]) for item in verified_answer_regions.values()],
                 )
-            prompt = build_vision_prompt_text(
+            prompt = build_scoring_prompt_text(
                 str(assignment["question"]), sub_questions, privacy_mode=True,
                 answer_regions=normalized_regions,
             )
@@ -8523,7 +8634,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 region_questions = [item for item in sub_questions if str(item.get("id")) in region_ids]
                 if len(region_questions) != 1:
                     raise ValueError("逐小题答案区域必须且只能关联一道小题")
-                region_prompt = build_vision_prompt_text(
+                region_prompt = build_scoring_prompt_text(
                     str(region_questions[0].get("question") or ""), region_questions, privacy_mode=True,
                     answer_regions=[region],
                 )
@@ -8635,6 +8746,7 @@ class AppHandler(BaseHTTPRequestHandler):
             "model": preview_model,
             "provider": preview_provider,
             "prompt": prompt,
+            "estimated_model_requests": (2 if payload.get("dual_review_enabled") is True else 1) * __import__("holistic_scoring").request_count(sub_questions, region_prompts),
             "region_prompts": region_prompts,
             "answer_regions": normalized_regions,
             "images": preview_images,
@@ -8708,7 +8820,7 @@ class AppHandler(BaseHTTPRequestHandler):
         try:
             row, sub_questions, result, photo_meta, photo_paths = self._question_remap_record(conn, submission_id)
             mapping = build_teacher_question_mapping(payload.get("question_mapping"), result, sub_questions)
-            prompt = build_vision_prompt_text(
+            prompt = build_scoring_prompt_text(
                 str(row["question"]), sub_questions, privacy_mode=True,
                 answer_regions=[], question_mapping=mapping,
             )
@@ -8767,7 +8879,7 @@ class AppHandler(BaseHTTPRequestHandler):
             conn.execute("BEGIN IMMEDIATE")
             row, sub_questions, result, photo_meta, photo_paths = self._question_remap_record(conn, submission_id)
             mapping = build_teacher_question_mapping(payload.get("question_mapping"), result, sub_questions)
-            prompt = build_vision_prompt_text(
+            prompt = build_scoring_prompt_text(
                 str(row["question"]), sub_questions, privacy_mode=True,
                 answer_regions=[], question_mapping=mapping,
             )
@@ -11914,7 +12026,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 raise ValueError("视觉模型请求必须先完成最终图片 AI Payload 预览和教师确认")
             try:
                 preview_token = str(payload.get("ai_privacy_preview_token", ""))
-                prompt = build_vision_prompt_text(
+                prompt = build_scoring_prompt_text(
                     str(assignment["question"]), sub_questions, privacy_mode=True,
                     answer_regions=answer_regions,
                 )

@@ -57,6 +57,12 @@ def rubric_readiness(
         if not question:
             reasons.append(f"question_missing:{question_id}")
             continue
+        if question.get("scoring_mode") == "holistic":
+            try:
+                from holistic_scoring import ready
+                ready(question)
+            except (ValueError,TypeError):reasons.append(f"holistic_configuration_required:{question_id}")
+            continue
         if question.get("needs_teacher_confirmation") is True:
             reasons.append(f"question_not_confirmed:{question_id}")
         if not str(question.get("question") or "").strip():

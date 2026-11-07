@@ -228,6 +228,7 @@ onUnmounted(()=>{stopPolling();alive=false;revision++;files.value=[];runs.value=
     <BatchPrivacyGrid :approvals="approvals" :statuses="statuses" :busy="busy" :editable="gradingInputMode==='original_photo'" @status="(i,v)=>{statuses[i]=v;consent=false}" @edit="i=>{editingOriginal=i;consent=false}"/>
     <fieldset v-if="approvals.length>1" :disabled="busy"><legend>批量设置隐私状态</legend><p>无需逐份点击确认。先查看本批实际外发图片，再选择本批隐私状态并点击应用。只应用到尚未确认的答卷，已设置的单份状态不会覆盖，仍可单独修改。</p><label for="upload-bulk-privacy">本批隐私状态</label><select id="upload-bulk-privacy" v-model="bulkPrivacy"><option value="">请选择状态</option><option value="pre_anonymized">导入前已避开身份信息</option><option value="redacted">确认预览图中身份信息已遮挡</option><option value="no_identity_visible">确认图中没有可辨认身份信息</option></select><button :disabled="!bulkPrivacy" @click="applyBulkPrivacy">应用到尚未确认的答卷</button></fieldset>
     <p v-if="editingOriginal>=0" role="status">正在编辑单份图片，请先重新生成并采用该份预览。</p>
+    <p>本批主观题预计模型请求：{{approvals.reduce((n,a)=>n+(a.preview.estimated_model_requests??2),0)}}次。开放题先转写再评分，分区及重试可能增加请求和费用。</p>
     <label class="check"><input type="checkbox" v-model="consent">我已逐张查看实际外发图片，确认没有未排除的身份信息，并同意提交双模型批改</label>
     <label v-if="combined" class="check"><input type="checkbox" v-model="combinedConsent"/>我同意同一批已核对的实际外发图用于两类评分；视觉识别每份另调用两个客观题模型，可能另外收费</label>
     <button class="primary" @click="send" :disabled="busy||!allowed||(combined&&!combinedConsent)">确认并上传本批</button> <button @click="cancelSelection" :disabled="busy">取消本批</button>

@@ -158,6 +158,8 @@ def capped_point_credit(claimed: float, maximum: float, accumulated: float) -> f
 
 def teacher_deterministic_score(sub_questions, point_decisions):
     """Score explicit teacher judgments against the saved rubric, never AI scores."""
+    if any(q.get('scoring_mode')=='holistic' for q in sub_questions):
+        raise ValueError('分档题请使用快捷总分终评，不生成逐点教师成绩')
     from auto_crop_double_review_poc import require_consistent_point_bank_values
     for question in sub_questions:
         require_consistent_point_bank_values(question)
