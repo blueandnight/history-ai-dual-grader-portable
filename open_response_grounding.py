@@ -171,13 +171,10 @@ def _ground_evidence(raw, transcript):
             raise ValueError('开放题史实判断的引文不在已核验的作答证据中')
 
 
-def _unscored(question, transcript, *, blank=False):
-    from holistic_scoring import digest, ready
-    return dict(sub_question_id=question['id'], scoring_version=ready(question)['scoring_version'],
-                rubric_hash=digest(question), answer_status='unanswered_candidate' if blank else 'image_unreadable',
+def _unscored(question, transcript, status, summary):
+    return dict(sub_question_id=question['id'], answer_status=status,
                 level_id=None, suggested_total=None, needs_review=True, confidence=transcript['confidence'],
-                summary=str(transcript.get('summary') or '')[:500] if blank else '开放题转写需教师核对',
-                image_readable=blank, region_complete=transcript['region_complete'],
+                summary=summary, image_readable=transcript['image_readable'], region_complete=transcript['region_complete'],
                 question_matched=transcript['question_matched'])
 
 
@@ -192,7 +189,10 @@ def normalize_grounded(payload, questions, transcribed, photo_count):
         raw = copy.deepcopy(scores.get(qid))
         issue = None
         if raw is None:
-            raw = _unscored(question, transcript, blank=transcript['status'] == 'blank')
+            if transcript['status'] == 'blank':
+                raw = _unscored(question, transcript, 'unanswered_candidate', str(transcript.get('summary') or '')[:500])
+            else:
+                raw = _unscored(question, transcript, 'image_unreadable', '开放题转写需教师核对')
         else:
             try:
                 if raw.get('answer_status') != 'answered':
@@ -205,7 +205,7 @@ def normalize_grounded(payload, questions, transcribed, photo_count):
                     raise ValueError('完全偏题的判断与给分冲突，需教师复核')
             except (ValueError, KeyError, TypeError, AttributeError) as exc:
                 issue = str(exc) if isinstance(exc, ValueError) else '开放题评分字段无法核实'
-                raw = _unscored(question, transcript)
+                raw = _unscored(question, transcript, 'scoring_invalid', '开放题评分结果未通过校验')
             else:
                 item['transcription'] = transcript
                 if transcript['review_only']:

@@ -30,7 +30,17 @@ def main() -> None:
         "source_conflicts": [],
     }
     (output / "draft.json").write_text(json.dumps(draft, ensure_ascii=False), encoding="utf-8")
-    source = build_exam_import_ai_source("合成 Word 文字", ["合成 PDF 文字"])
+    scoring_text = "评分标准：史实、论证。0–4分：史实不足。5–8分：史实支持观点。"
+    examples = ["范例一：从制度角度论证。", "范例二：从交流角度论证。"]
+    source = build_exam_import_ai_source("\n".join([*examples, scoring_text]), ["合成 PDF 文字"])
+    model_result = raw_ai_result(26)
+    model_result["subjective_questions"].append({
+        "question_id": "19.1", "question": "自拟论题并论证", "question_type": "essay", "max_score": 8,
+        "reference_examples": examples,
+        "scoring_guide": {"mode": "holistic", "source_quote": scoring_text, "dimensions": ["史实", "论证"],
+                          "levels": [{"min_score": 0, "max_score": 4, "description": "史实不足"},
+                                     {"min_score": 5, "max_score": 8, "description": "史实支持观点"}]},
+    })
     config = {
         "provider": "synthetic", "provider_label": "合成模型", "model": "synthetic-model",
         "base_url": "https://api.example.test/v1", "api_key": "synthetic-key", "timeout": "30",
@@ -52,7 +62,7 @@ def main() -> None:
             with patch.object(app, "_exam_import_ai_source", return_value=source), \
                  patch.object(app, "rubric_generation_model_config", return_value=config), \
                  patch.object(app, "model_chat_completions_endpoint", return_value="https://api.example.test/v1/chat/completions"), \
-                 patch.object(app, "call_exam_import_ai_model", return_value=raw_ai_result(26)) as model_call, \
+                 patch.object(app, "call_exam_import_ai_model", return_value=model_result) as model_call, \
                  patch.object(app, "cached_local_network_interfaces", return_value=[]), \
                  patch.object(app, "append_audit_event"):
                 for width in (1280,390):

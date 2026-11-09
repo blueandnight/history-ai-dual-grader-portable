@@ -1,6 +1,6 @@
 import { request } from './api'
 export type Point = { label: string; score: number | string | null }
-export type Sub = { question_id: string; question: string; reference_answer: string; max_score: number | string | null; rubric_draft: Point[]; scoring_mode?: 'weighted'|'point_bank'|'holistic'; question_type?:'subjective'|'essay'|'explanation'; holistic?:{aggregation?:string;projects?:{id:string;label:string;max_score:number;score_step:number;levels:{id:string;min_score:number;max_score:number;description:string}[]}[];score_step?:number|string|null;dimension_definitions?:{id:string;label:string}[];levels:{id?:string;min_score:number|string|null;max_score:number|string|null;description:string}[];dimensions:string;notes:string}; point_value?: number|string|null }
+export type Sub = { question_id: string; question: string; reference_answer: string; ai_reference_alternative?: string; scoring_guide_source?: string; max_score: number | string | null; rubric_draft: Point[]; scoring_mode?: 'weighted'|'point_bank'|'holistic'; question_type?:'subjective'|'essay'|'explanation'; holistic?:{aggregation?:string;projects?:{id:string;label:string;max_score:number;score_step:number;levels:{id:string;min_score:number;max_score:number;description:string}[]}[];score_step?:number|string|null;dimension_definitions?:{id:string;label:string}[];levels:{id?:string;min_score:number|string|null;max_score:number|string|null;description:string}[];dimensions:string;notes:string}; point_value?: number|string|null }
 export type Major = { label: string; prompt: string; sub_questions: Sub[] }
 export type SourceConflict = {
   type: string; section?: string; label?: string; question_id?: string;
@@ -136,11 +136,15 @@ export function preserveAiExamEdits(incoming:Draft,previous:Draft,current:Confir
     for(const sub of major.sub_questions){
       const a=old.sub_questions.find(q=>q.question_id===sub.question_id),b=edit.sub_questions.find(q=>q.question_id===sub.question_id)
       if(!a||!b)continue
-      for(const key of ['question','reference_answer','max_score','scoring_mode','point_value','question_type','holistic'] as const){
+      for(const key of ['question','reference_answer','max_score','scoring_mode','point_value','question_type'] as const){
         if(value(a[key])!==value(b[key]))Object.assign(sub,{[key]:b[key]})
       }
       const points=(q:Sub)=>q.rubric_draft.map(p=>({label:p.label,score:value(p.score)}))
-      if(JSON.stringify(points(a))!==JSON.stringify(points(b)))sub.rubric_draft=JSON.parse(JSON.stringify(b.rubric_draft))
+      if(JSON.stringify(points(a))!==JSON.stringify(points(b)) || JSON.stringify(a.holistic)!==JSON.stringify(b.holistic)
+        || a.scoring_mode!==b.scoring_mode || value(a.point_value)!==value(b.point_value)){
+        Object.assign(sub,{scoring_mode:b.scoring_mode,point_value:b.point_value,holistic:b.holistic,
+          rubric_draft:JSON.parse(JSON.stringify(b.rubric_draft))})
+      }
     }
   }
   for(const id of conflictIds(incoming))if(current.answer_conflict_resolutions[id]===next.objective_answer_key[id])next.answer_conflict_resolutions[id]=current.answer_conflict_resolutions[id]!

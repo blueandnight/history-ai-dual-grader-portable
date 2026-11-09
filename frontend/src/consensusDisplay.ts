@@ -7,6 +7,7 @@ export function visibleTotal(p:Paper,side:'A'|'B'){
  return finite(value)?value:null
 }
 export function answerNote(status?:string,confirmed=false){
+ if(status==='scoring_invalid')return confirmed?'原AI结果：评分校验未通过':'评分校验未通过，待核对'
  if(confirmed&&['unanswered_candidate','question_unmatched','image_unreadable','missing'].includes(status||''))return '原AI结果：'+({unanswered_candidate:'疑似空白',question_unmatched:'题号未匹配',image_unreadable:'图像读取异常',missing:'无小题评分'} as Record<string,string>)[status!]
  return ({unanswered_candidate:'疑似空白，待教师确认',question_unmatched:'题号未匹配，待核对',image_unreadable:'图像无法可靠读取',missing:'未获得小题评分',blank_confirmed:'已确认空白'} as Record<string,string>)[status||'']||''
 }
@@ -60,7 +61,7 @@ export function compactReason(p:Paper){
 export function compactQuestionScore(q:Question,side:'a'|'b'){
  if(finite(q[side]))return String(q[side])+(q.scoring_mode==='holistic'?' · '+((side==='a'?q.level_a:q.level_b)||'—'):'')
  if(q.blank_confirmed&&q[side==='a'?'a_status':'b_status']==='unanswered_candidate')return '原疑似空白'
- return ({unanswered_candidate:'待确认',question_unmatched:'未匹配',image_unreadable:'看不清'} as Record<string,string>)[q[side==='a'?'a_status':'b_status']||'']||'—'
+ return ({unanswered_candidate:'待确认',question_unmatched:'未匹配',image_unreadable:'看不清',scoring_invalid:'评分校验未通过'} as Record<string,string>)[q[side==='a'?'a_status':'b_status']||'']||'—'
 }
 
 export function reviewGroup(p:Paper){

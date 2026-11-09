@@ -1,9 +1,8 @@
 """AI-assisted exam structure parsing from Word/PDF text (no images sent).
 
 The deterministic importers remain the source of the draft and layout. This
-module only adds an optional, teacher-confirmed AI pass that extracts question
-numbers, options, answers and subjective reference answers so a different paper
-(including a 26-question paper) does not require importer code changes.
+module adds an optional, teacher-confirmed AI pass for questions, answers and
+source scoring guides.
 
 Naming rules:
 - objective ids are plain integers ("1".."26");
@@ -16,9 +15,10 @@ import copy
 import json
 import math
 import re
+import unicodedata
 from typing import Any
 
-AI_PARSE_PROMPT_VERSION = "exam-import-ai-parse-v1"
+AI_PARSE_PROMPT_VERSION = "exam-import-ai-parse-v2"
 MAX_SOURCE_CHARS = 100_000
 MAX_OBJECTIVE_QUESTIONS = 200
 MAX_SUBJECTIVE_QUESTIONS = 100
@@ -93,6 +93,49 @@ def build_exam_import_ai_payload(source_text: str, model: str, provider: str = "
     return payload
 
 
+def build_exam_import_rubric_payload(source_text: str, model: str, provider: str = "") -> dict[str, Any]:
+    """Build the text-only chat payload; provider JSON options are added by app."""
+    selected_model = str(model or "").strip()
+    if not selected_model:
+        raise ValueError("尚未选择用于 AI 解析的模型")
+    prompt = (
+        "你是中学历史教师的试卷结构抽取助手。下面是从同一份试卷的 Word 文档和/或 PDF 中提取的文字；"
+        "【PDF 第 N 页】只是分页标记。\n"
+        "只抽取结构，不编造、不改写原文；看不清或缺失的字段留空字符串或 null。\n"
+        "任务：\n"
+        "1. title：试卷标题；\n"
+        "2. objective_questions：客观选择题数组。question_id 为纯数字题号；stem 为题干原文；"
+        "options 为 A/B/C/D 四个选项原文的对象；answer 为正确选项字母（从评分参考/答案页核对；无法确定用 null）；\n"
+        "3. subjective_questions：主观小题数组。question_id 形如 17.1，单题无小题序号时用大题号加 .1。"
+        "即使题目与答案交错，也按题号配对，答案标题和范例中的编号不是新题。question 只放设问原文，"
+        "reference_answer 只放参考答案原文；开放题用 reference_examples 分别保留多个参考范例原文，允许为空，不能把范例内容当必答点。"
+        "max_score 为原文明确的小题满分，否则用 null。question_type 选 subjective、essay（开放论证）或 explanation（开放解释或设计）。\n"
+        "4. scoring_guide：只提取该题的原卷评分说明。source_quote 是包含这些规则的连续原文；无依据用空对象。"
+        "普通题 points 每项写 label（原文得分点）、score（明确对应的分值，否则 null）；"
+        "明确每点同分且任答若干点时用 mode=point_bank 和 point_value，按各项不同分值累计时用 weighted。"
+        "开放题用 mode=holistic。整体分档写 levels，每项有 min_score、max_score、description，评价维度用 dimensions 数组。"
+        "分项给分的开放题保留各项目原文于 source_quote，不拆成必答史实，不编造档次、维度、步长或分值。"
+        "题号只出现一次，按原文顺序。不要返回解析过程或学生信息。"
+        "只返回 JSON 对象，不要 Markdown。格式："
+        '{"title":"","objective_questions":[{"question_id":"1","stem":"","options":{"A":"","B":"","C":"","D":""},"answer":"A"}],'
+        '"subjective_questions":[{"question_id":"17.1","question":"","question_type":"subjective",'
+        '"reference_answer":"","reference_examples":[],"max_score":4,"scoring_guide":{"mode":"weighted","source_quote":"",'
+        '"points":[],"point_value":null,"levels":[],"dimensions":[]}}]}'
+        f"\n试卷文字如下：\n{source_text}"
+    )
+    payload = {
+        "model": selected_model,
+        "temperature": 0,
+        "max_tokens": 8000,
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {"role": "system", "content": "你输出的是教师审核用的试卷结构草案，不是最终考试数据。"},
+            {"role": "user", "content": prompt},
+        ],
+    }
+    return payload
+
+
 def _text(value: Any, limit: int = 8000) -> str:
     return str(value or "").strip()[:limit]
 
@@ -116,6 +159,8 @@ def _subjective_id(value: Any) -> tuple[str, str]:
 
 
 def _max_score(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
     try:
         score = float(value)
     except (TypeError, ValueError):
@@ -125,11 +170,66 @@ def _max_score(value: Any) -> float | None:
     return round(score, 2)
 
 
-def normalize_exam_import_ai_result(raw: Any) -> dict[str, Any]:
+def _source_key(text: str) -> str:
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", text))
+
+
+def _quoted(text: str, source_key: str | None) -> bool:
+    key = _source_key(text)
+    return bool(key) and (source_key is None or key in source_key)
+
+
+def _scoring_draft(raw: Any, source_key: str | None) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    quote = _text(raw.get("source_quote"))
+    if not _quoted(quote, source_key):
+        return {}
+    quote_key = _source_key(quote)
+
+    def source_score(value: Any, prefix: str) -> float | None:
+        score = _max_score(value)
+        scores = re.findall(rf"{prefix}(\d+(?:\.\d+)?)分", quote_key)
+        if score is not None and any(float(number) == score for number in scores):
+            return score
+        return None
+
+    mode = raw.get("mode")
+    points = []
+    point_value = source_score(raw.get("point_value"), "每(?:个)?(?:点|项|处)") if mode == "point_bank" else None
+    for point in raw["points"][:60] if isinstance(raw.get("points"), list) else []:
+        if isinstance(point, dict) and _quoted(label := _text(point.get("label"), 500), quote_key):
+            score = point_value if point_value is not None else source_score(
+                point.get("score"), re.escape(_source_key(label)) + r"[，,：:（(【\[]*",
+            )
+            points.append({"label": label, "score": score, "needs_teacher_confirmation": True})
+
+    levels = []
+    range_pattern = r"(?<![\d.])(\d+(?:\.\d+)?)(?:分?[-—–~～至到](\d+(?:\.\d+)?))?分"
+    for level in raw["levels"][:30] if isinstance(raw.get("levels"), list) else []:
+        if not isinstance(level, dict) or not _quoted(description := _text(level.get("description"), 1000), quote_key):
+            continue
+        bounds = (level.get("min_score"), level.get("max_score"))
+        if any(type(n) not in (int, float) or not math.isfinite(n) or not 0 <= n <= 200 for n in bounds):
+            continue
+        low, high = bounds
+        ranges = [(float(start), float(end or start))
+                  for segment in re.split(r"[。；;]", quote_key) if _quoted(description, segment)
+                  for start, end in re.findall(range_pattern, segment)]
+        if low <= high and (low, high) in ranges:
+            levels.append({"min_score": low, "max_score": high, "description": description})
+    dimensions = raw.get("dimensions")
+    dimensions = [_text(d, 100) for d in dimensions[:30] if isinstance(d, str) and _quoted(_text(d, 100), quote_key)] if isinstance(dimensions, list) else []
+    return {"source_quote": quote, "mode": mode, "points": points, "point_value": point_value,
+            "levels": levels, "dimensions": dimensions}
+
+
+def normalize_exam_import_ai_result(raw: Any, *, source_text: str | None = None) -> dict[str, Any]:
     """Validate model output; return canonical draft fragments plus issues."""
     if not isinstance(raw, dict):
         raise ValueError("AI 解析结果不是 JSON 对象")
     issues: list[str] = []
+    source_key = _source_key(source_text) if source_text is not None else None
     objectives: list[dict[str, Any]] = []
     seen_objective: set[str] = set()
     raw_objectives = raw.get("objective_questions", raw.get("objectives"))
@@ -187,12 +287,23 @@ def normalize_exam_import_ai_result(raw: Any) -> dict[str, Any]:
         if supplied_major and _objective_id(supplied_major) != major_label:
             issues.append(f"主观题 {question_id} 的大题号不一致，已按小题号归入第 {major_label} 题")
         reference_answer = _text(item.get("reference_answer", item.get("answer")))
+        examples = item.get("reference_examples")
+        reference_parts = dict.fromkeys([reference_answer] + ([_text(example) for example in examples[:12] if isinstance(example, str)] if isinstance(examples, list) else []))
+        if any(text and not _quoted(text, source_key) for text in reference_parts):
+            issues.append(f"主观题 {question_id} 的部分参考答案无法对应原文，已留待核对")
+        reference_answer = "\n\n".join(text for text in reference_parts if _quoted(text, source_key))[:16000]
+        guide = _scoring_draft(item.get("scoring_guide"), source_key)
+        if item.get("scoring_guide") and not guide:
+            issues.append(f"主观题 {question_id} 的评分说明无法对应原文，已留待核对")
+        question_type = item.get("question_type")
         subjective.append({
             "question_id": question_id,
             "major_label": major_label,
             "question": _text(item.get("question", item.get("stem"))),
             "reference_answer": reference_answer,
             "max_score": _max_score(item.get("max_score")),
+            "question_type": question_type if question_type in ("essay", "explanation") else "subjective",
+            "scoring_guide": guide,
         })
 
     if not objectives and not subjective:
@@ -206,7 +317,48 @@ def normalize_exam_import_ai_result(raw: Any) -> dict[str, Any]:
 
 
 def _normalized_answer_compare(left: str, right: str) -> bool:
-    return re.sub(r"\s+", "", str(left or "")).lower() == re.sub(r"\s+", "", str(right or "")).lower()
+    return _source_key(left).casefold() == _source_key(right).casefold()
+
+
+def _merge_scoring_guide(sub: dict[str, Any], ai: dict[str, Any], context: str) -> None:
+    from docx_question_import import build_subquestion_draft
+
+    guide = ai["scoring_guide"]
+    quote = guide.get("source_quote", "")
+    if quote:
+        sub["scoring_guide_source"] = quote
+    reference = str(sub.get("reference_answer") or sub.get("standard_answer") or "")
+    extracted = build_subquestion_draft(
+        parent_question_id=ai["major_label"], part_number=ai["question_id"].split(".")[1],
+        question_text=sub["question"], question_context=context, reference_answer=quote or reference,
+        max_score=sub.get("max_score"), answer_found=bool(reference),
+    )
+    points = sub.get("rubric_draft") or []
+    if any(point.get("score") is not None for point in points):
+        return
+    if (sub.get("scoring_mode") == "holistic" or extracted["scoring_mode"] == "holistic"
+            or ai["question_type"] in ("essay", "explanation") or guide.get("mode") == "holistic"):
+        current_config = sub.get("holistic") or {}
+        if current_config.get("aggregation") == "sum_projects" or current_config.get("levels"):
+            return
+        config = extracted.get("holistic") or {"levels": [], "dimensions": "", "notes": ""}
+        if config.get("aggregation") != "sum_projects":
+            config.update(current_config)
+        if guide.get("levels"):
+            config["levels"] = guide["levels"]
+        if not config.get("dimensions") and guide.get("dimensions"):
+            config["dimensions"] = "、".join(guide["dimensions"])
+        if quote and config.get("aggregation") != "sum_projects":
+            config["notes"] = quote
+        sub.update(scoring_mode="holistic", holistic=config, rubric_draft=[])
+        sub["question_type"] = ai["question_type"] if ai["question_type"] != "subjective" else extracted["question_type"]
+    elif guide.get("points") and (not points or any(point["score"] is not None for point in guide["points"])):
+        sub["rubric_draft"] = guide["points"]
+        sub["rubric_parse_status"] = "candidate_points_draft"
+        if guide.get("point_value") is not None:
+            sub.update(scoring_mode="point_bank", point_value=guide["point_value"])
+        elif guide.get("mode") == "weighted":
+            sub["scoring_mode"] = "weighted"
 
 
 def merge_exam_import_ai_result(draft: dict[str, Any], parsed: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -312,11 +464,14 @@ def merge_exam_import_ai_result(draft: dict[str, Any], parsed: dict[str, Any]) -
                 if not current_reference:
                     existing["reference_answer"] = ai["reference_answer"]
                     existing["standard_answer"] = ai["reference_answer"]
+                    existing["answer_found"] = True
                     updated_subjectives.append(question_id)
                 elif not _normalized_answer_compare(current_reference, ai["reference_answer"]):
                     subjective_conflicts.append(question_id)
+                    existing["ai_reference_alternative"] = ai["reference_answer"]
             if existing.get("max_score") in (None, "") and ai["max_score"] is not None:
                 existing["max_score"] = ai["max_score"]
+            _merge_scoring_guide(existing, ai, majors.get(major_label, {}).get("prompt", ""))
             existing["needs_teacher_confirmation"] = True
             continue
         major = majors.get(major_label)
@@ -342,6 +497,7 @@ def merge_exam_import_ai_result(draft: dict[str, Any], parsed: dict[str, Any]) -
             "needs_teacher_confirmation": True,
             "ai_parse": True,
         }
+        _merge_scoring_guide(new_sub, ai, major.get("prompt", ""))
         major.setdefault("sub_questions", []).append(new_sub)
         sub_by_id[question_id] = new_sub
         added_subjectives.append(question_id)

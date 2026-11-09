@@ -53,12 +53,26 @@ class GroundingTests(unittest.TestCase):
         self.assertEqual(score['suggested_total'], 0)
         self.assertTrue(hs.valid_sub(score, self.question))
 
+    def test_missing_version_echoes_preserve_score_but_missing_judgment_is_invalid(self):
+        item = copy.deepcopy(self.item)
+        item.pop('scoring_version')
+        item.pop('rubric_hash')
+        self.assertEqual(self.grade(item)['suggested_total'], 0)
+        item.pop('problem_flags')
+        result = self.grade(item)
+        self.assertEqual(result['answer_status'], 'scoring_invalid')
+        self.assertIsNone(result['suggested_total'])
+        self.assertTrue(result['blocked'])
+        self.assertTrue(result['holistic_result']['image_readable'])
+        self.assertIn('关键问题标记无效', result['block_reasons'])
+
     def test_fabricated_quotes_block_five_or_eight_points(self):
         for score, quote in ((5, '推恩令'), (8, '安西都护府')):
             item = copy.deepcopy(self.item)
             item['evidence'][0]['student_quote'] = quote
             item['suggested_total'] = score
             result = self.grade(item)
+            self.assertEqual(result['answer_status'], 'scoring_invalid')
             self.assertIsNone(result['suggested_total'])
             self.assertIn('不在对应的答卷转写行', result['block_reasons'][0])
 
@@ -89,6 +103,7 @@ class GroundingTests(unittest.TestCase):
         result = normalize_grounded({'sub_questions': []}, [self.question], transcript, 1)
         self.assertTrue(result['blocked'])
         self.assertIsNone(result['sub_questions'][0]['suggested_total'])
+        self.assertEqual(result['sub_questions'][0]['answer_status'], 'image_unreadable')
 
     def test_on_topic_partial_credit_and_dual_transcription_conflict(self):
         item = copy.deepcopy(self.item)

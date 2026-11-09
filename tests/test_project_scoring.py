@@ -21,10 +21,8 @@ class ProjectTests(unittest.TestCase):
         q=project_questions()[0];self.assertEqual([p['max_score'] for p in q['holistic']['projects']],[1,2,8,1])
         text=hs.prompt('合成考试',[q]);self.assertIn('analytic-project-grading-v1',text);self.assertIn('然后求和',text);self.assertNotIn('维度不得换算分数',text)
         r=project_raw(q);self.assertEqual(hs.normalize({'sub_questions':[r]},[q],1)['suggested_total'],12)
-        for change in ('step','range','missing','version','fingerprint','level'):
+        for change in ('step','range','missing','level'):
             raw=copy.deepcopy(r)
-            if change=='version':raw['scoring_version']='wrong'
-            if change=='fingerprint':raw['rubric_hash']='wrong'
             if change=='level':raw['dimension_assessments'][0]['level_id']='wrong'
             if change=='step':raw['dimension_assessments'][0]['score']=.5
             if change=='range':raw['dimension_assessments'][0]['score']=2
@@ -42,6 +40,8 @@ class ProjectTests(unittest.TestCase):
         result = hs.normalize({'sub_questions': [raw]}, [q], 1)
         self.assertEqual(result['suggested_total'], 11)
         self.assertFalse(result['blocked'])
+        self.assertEqual(result['sub_questions'][0]['holistic_result']['rubric_hash'], hs.digest(q))
+        self.assertEqual(result['sub_questions'][0]['holistic_result']['scoring_version'], 'analytic-project-grading-v1')
         self.assertNotIn('rubric_hash', raw)
         raw['dimension_assessments'][-1]['score'] = 1
         with self.assertRaisesRegex(ValueError, '证据无效'):

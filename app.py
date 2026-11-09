@@ -49,7 +49,7 @@ from docx_question_import import parse_docx as parse_docx_question_import, extra
 from exam_layout_profile_service import build_exam_layout_profile, layout_profile_status
 from exam_import_ai import (
     AI_PARSE_PROMPT_VERSION,
-    build_exam_import_ai_payload,
+    build_exam_import_rubric_payload,
     build_exam_import_ai_source,
     merge_exam_import_ai_result,
     normalize_exam_import_ai_result,
@@ -8177,7 +8177,7 @@ def _check_exam_import_ai_privacy(source: dict[str, Any]) -> None:
 
 def call_exam_import_ai_model(source_text: str, model_config: dict[str, str]) -> dict[str, Any]:
     """Send extracted Word/PDF text (never images) and return the JSON result."""
-    payload = build_exam_import_ai_payload(source_text, model_config["model"], model_config.get("provider", ""))
+    payload = build_exam_import_rubric_payload(source_text, model_config["model"], model_config.get("provider", ""))
     payload.update(deepseek_json_payload_options(model_config.get("provider", ""), model_config["model"]))
     endpoint = model_chat_completions_endpoint(model_config)
     headers = {"Content-Type": "application/json"}
@@ -10507,7 +10507,7 @@ class AppHandler(BaseHTTPRequestHandler):
         if str(payload.get("preview_sha256") or "") != expected_fingerprint:
             raise ValueError("试卷文字或模型配置已变化，请重新预览后再解析")
         raw_result = call_exam_import_ai_model(source["text"], model_config)
-        parsed = normalize_exam_import_ai_result(raw_result)
+        parsed = normalize_exam_import_ai_result(raw_result, source_text=source["text"])
         merged, summary = merge_exam_import_ai_result(draft, parsed)
         atomic_write_text(draft_file, json.dumps(merged, ensure_ascii=False, indent=2) + "\n")
         conn = get_db()

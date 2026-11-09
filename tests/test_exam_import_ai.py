@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 import app
 from exam_import_ai import (
-    build_exam_import_ai_payload,
+    build_exam_import_rubric_payload,
     build_exam_import_ai_source,
     merge_exam_import_ai_result,
     normalize_exam_import_ai_result,
@@ -155,6 +155,57 @@ class ExamImportAiModuleTests(unittest.TestCase):
         self.assertEqual(merged["title"], "合成试卷")
         self.assertEqual(merged["material_questions"][0]["prompt"], "原始材料")
 
+    def test_open_response_keeps_multiple_examples_apart_from_source_levels(self):
+        quote = "评分标准：评价维度为史实、论证。0–4分：史实不足。5–8分：史实与观点相符。"
+        examples = ["范例一：以区域交流为角度。", "范例二：以制度演变为角度。"]
+        raw = {"subjective_questions": [{
+            "question_id": "19.1", "question": "自拟论题并论证。", "question_type": "essay", "max_score": 8,
+            "reference_examples": [*examples, "未见于原文的第三个范例"],
+            "scoring_guide": {"mode": "holistic", "source_quote": quote, "dimensions": ["史实", "论证", "语言华丽"],
+                              "levels": [{"min_score": 0, "max_score": 4, "description": "史实不足"},
+                                         {"min_score": 5, "max_score": 8, "description": "史实与观点相符"},
+                                         {"min_score": 4, "max_score": 4, "description": "史实不足"},
+                                         {"min_score": 5, "max_score": 8, "description": "史实不足"},
+                                         {"min_score": 9, "max_score": 12, "description": "另设标准"}]},
+        }]}
+        draft = {"material_questions": []}
+        parsed = normalize_exam_import_ai_result(raw, source_text="\n".join([*examples, quote]))
+        merged, _ = merge_exam_import_ai_result(draft, parsed)
+        item = merged["material_questions"][0]["sub_questions"][0]
+        self.assertEqual(item["reference_answer"], "\n\n".join(examples))
+        self.assertEqual(item["scoring_mode"], "holistic")
+        self.assertEqual(item["scoring_guide_source"], quote)
+        self.assertEqual(item["rubric_draft"], [])
+        self.assertEqual(item["holistic"]["dimensions"], "史实、论证")
+        self.assertEqual(len(item["holistic"]["levels"]), 2)
+        self.assertIsNone(item["holistic"].get("score_step"))
+        self.assertTrue(item["needs_teacher_confirmation"])
+        self.assertTrue(parsed["issues"])
+
+    def test_scored_points_need_source_and_do_not_replace_existing_scored_rubric(self):
+        quote = "列举制度变革（2分）；说明历史影响。"
+        raw = {"subjective_questions": [{
+            "question_id": "17.1", "question": "设问", "max_score": 4,
+            "scoring_guide": {"mode": "weighted", "source_quote": quote, "points": [
+                {"label": "列举制度变革", "score": 2}, {"label": "说明历史影响", "score": 2},
+                {"label": "未见于原文的得分点", "score": 2},
+            ]},
+        }]}
+        draft = synthetic_draft()
+        parsed = normalize_exam_import_ai_result(raw, source_text=quote)
+        merged, _ = merge_exam_import_ai_result(draft, parsed)
+        item = merged["material_questions"][0]["sub_questions"][0]
+        self.assertEqual(item["reference_answer"], "原始答案17.1")
+        self.assertEqual(item["scoring_mode"], "weighted")
+        self.assertEqual([(p["label"], p["score"]) for p in item["rubric_draft"]],
+                         [("列举制度变革", 2), ("说明历史影响", None)])
+        original = draft["material_questions"][0]["sub_questions"][0]
+        original["rubric_draft"][0]["score"] = 4
+        merged, _ = merge_exam_import_ai_result(draft, parsed)
+        self.assertEqual(merged["material_questions"][0]["sub_questions"][0]["rubric_draft"], original["rubric_draft"])
+        ungrounded = normalize_exam_import_ai_result(raw, source_text="这里没有评分细则")
+        self.assertEqual(ungrounded["subjective_questions"][0]["scoring_guide"], {})
+
     def test_source_uses_text_only_and_rejects_empty_or_oversized_input(self):
         source = build_exam_import_ai_source("Word题干", ["PDF第一页", "PDF第二页"], title="合成试卷")
         self.assertIn("【Word 文档文字】", source["text"])
@@ -167,12 +218,14 @@ class ExamImportAiModuleTests(unittest.TestCase):
             build_exam_import_ai_source("字" * 100_001, [])
 
     def test_payload_is_text_only_and_requests_json_structure(self):
-        payload = build_exam_import_ai_payload("试卷文字", "synthetic-model", "deepseek")
+        payload = build_exam_import_rubric_payload("试卷文字", "synthetic-model", "deepseek")
         content = payload["messages"][1]["content"]
         self.assertIsInstance(content, str)
         self.assertNotIn("image_url", json.dumps(payload, ensure_ascii=False))
         self.assertIn("objective_questions", content)
         self.assertIn("subjective_questions", content)
+        self.assertIn("scoring_guide", content)
+        self.assertIn("reference_examples", content)
         self.assertEqual(payload["response_format"], {"type": "json_object"})
 
 

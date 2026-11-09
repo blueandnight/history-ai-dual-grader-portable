@@ -15,6 +15,8 @@ describe('真实状态与完整性展示',()=>{
   expect(questionDifference({...q,b:null,b_status:'question_unmatched'})).toBe('题号待核对')
   expect(questionDifference({...q,b:null,b_status:'image_unreadable'})).toBe('图像待核对')
   expect(answerNote('missing')).toBe('未获得小题评分')
+  expect(compactQuestionScore({...q,b:null,b_status:'scoring_invalid'},'b')).toBe('评分校验未通过')
+  expect(answerNote('scoring_invalid')).toBe('评分校验未通过，待核对')
  })
  it('内容过滤优先显示，不从HTTP200推断评分成功',()=>{
   expect(scoreSummary({...paper,model_issues:{A:'',B:'服务商内容过滤，未获得完整评分；请核对，勿反复重试'}})).toContain('MiMo：服务商内容过滤')

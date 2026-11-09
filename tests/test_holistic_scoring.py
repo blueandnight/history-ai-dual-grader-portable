@@ -50,12 +50,29 @@ class ProtocolTests(unittest.TestCase):
         q=copy.deepcopy(self.q);q['holistic']['levels'][1]['id']='low'
         with self.assertRaises(ValueError):validate(q['holistic'],12)
     def test_invalid_model_fields_are_rejected(self):
-        for key,value in [('level_id','unknown'),('suggested_total',13),('suggested_total',9.5),('rubric_hash','stale'),('scoring_version','old'),('dimension_assessments',[]),('evidence',[]),('confidence',True)]:
+        for key,value in [('sub_question_id','Q21.1'),('level_id','unknown'),('suggested_total',13),('suggested_total',9.5),('dimension_assessments',[]),('evidence',[]),('confidence',True)]:
             with self.subTest(key=key,value=value):
                 r=copy.deepcopy(self.raw);r[key]=value
                 with self.assertRaises(ValueError):self.normalized(r)
         r=copy.deepcopy(self.raw);r['evidence'][0]['location']['photo_index']=2
         with self.assertRaises(ValueError):self.normalized(r)
+    def test_metadata_bound_to_request_and_checked_when_reusing_saved_result(self):
+        for echoes in ({}, {'scoring_version': 'old', 'rubric_hash': 'stale'}):
+            raw = copy.deepcopy(self.raw)
+            raw.pop('scoring_version')
+            raw.pop('rubric_hash')
+            raw.update(echoes)
+            hs.check(raw, self.q, 1)
+            saved = self.normalized(raw)['sub_questions'][0]
+            self.assertEqual(saved['holistic_result']['scoring_version'], hs.PROMPT_VERSION)
+            self.assertEqual(saved['holistic_result']['rubric_hash'], hs.digest(self.q))
+            self.assertTrue(hs.valid_sub(saved, self.q))
+            for field in ('scoring_version', 'rubric_hash'):
+                altered = copy.deepcopy(saved)
+                altered['holistic_result'][field] = 'stale'
+                self.assertFalse(hs.valid_sub(altered, self.q))
+                del altered['holistic_result'][field]
+                self.assertFalse(hs.valid_sub(altered, self.q))
     def test_consensus_structured_judgments_not_wording(self):
         a=self.normalized();r=copy.deepcopy(self.raw);r['strengths']=['另一种措辞'];r['dimension_assessments'][0]['reason']='不同措辞';r['fact_checks'][0]['student_quote']='合成制度推动交流并影响社会'
         self.assertEqual(hs.compare(a['sub_questions'][0],self.normalized(r)['sub_questions'][0]),[])
@@ -99,6 +116,8 @@ class ProtocolTests(unittest.TestCase):
                         lines=[dict(id='L1',text=evidence['student_quote'],location=evidence['location'])])]}
                 elif hs.PROMPT_VERSION in text:
                     item = essay(self.q)
+                    item.pop('scoring_version')
+                    item.pop('rubric_hash')
                     for entry in item['evidence']:
                         entry['line_id'] = 'L1'
                     raw = {'sub_questions': [item]}

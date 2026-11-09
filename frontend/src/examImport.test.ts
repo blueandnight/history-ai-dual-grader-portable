@@ -30,6 +30,15 @@ it('reference links include exam and blank answer-sheet pages, excluding unknown
     {page:4,url:'/api/exam-import-reference?draft_id='+ 'a'.repeat(32)+'&page_number=4'},
   ]);expect(references(d,'../secret')).toEqual([])
 })
+it('keeps a teacher rubric visible when AI proposes a different scoring mode',()=>{
+ const old=draft(),current=editDraft(old),incoming=structuredClone(old)
+ const manual=current.material_questions[0].sub_questions[0],ai=incoming.material_questions[0].sub_questions[0]
+ manual.rubric_draft[0].label='教师修改的评分点'
+ Object.assign(ai,{scoring_mode:'holistic',rubric_draft:[],holistic:{levels:[],dimensions:'论证',notes:'AI提取'}})
+ const result=preserveAiExamEdits(incoming,old,current).material_questions[0].sub_questions[0]
+ expect(result.scoring_mode).toBe('weighted');expect(result.holistic).toBeUndefined()
+ expect(result.rubric_draft).toEqual(manual.rubric_draft)
+})
 it('keeps unequal weights, IDs and missing scores, requiring explicit confirmation', () => {
   const d=draft(), c=editDraft(d); expect(c.teacher_confirmed).toBe(false)
   c.teacher_confirmed=true; expect(blockers(d,c)).toEqual([])
