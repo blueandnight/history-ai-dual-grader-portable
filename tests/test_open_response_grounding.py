@@ -66,6 +66,24 @@ class GroundingTests(unittest.TestCase):
         self.assertTrue(result['holistic_result']['image_readable'])
         self.assertIn('关键问题标记无效', result['block_reasons'])
 
+    def test_redundant_judgments_keep_verified_score_for_review_only(self):
+        item = copy.deepcopy(self.item)
+        item['constraint_status'] = 'uncertain'
+        item['problem_flags']['task_constraint_violation'] = True
+        item['factual_status'] = 'uncertain'
+        item['critical_factual_issues'] = ['史实仍待核对']
+        item.pop('needs_review')
+        result = self.grade(item)
+        self.assertEqual(result['answer_status'], 'answered')
+        self.assertEqual(result['suggested_total'], 0)
+        self.assertTrue(result['blocked'])
+        self.assertFalse(hs.valid_sub(result, self.question))
+        saved = result['holistic_result']
+        self.assertEqual(saved['constraint_status'], 'uncertain')
+        self.assertEqual(saved['reported_conflicting_flags'], {'task_constraint_violation': True})
+        self.assertEqual(saved['critical_factual_issues'], ['史实仍待核对'])
+        self.assertFalse(saved['problem_flags']['task_constraint_violation'])
+
     def test_fabricated_quotes_block_five_or_eight_points(self):
         for score, quote in ((5, '推恩令'), (8, '安西都护府')):
             item = copy.deepcopy(self.item)

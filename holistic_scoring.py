@@ -117,8 +117,39 @@ def check(raw, question, photo_count, *, grounded=False):
     facts=raw.get('fact_checks')
     if not isinstance(facts,list) or (not facts and not grounded) or any(not str(f.get('student_quote','')).strip() or f.get('judgment') not in ('correct','incorrect','uncertain') or not str(f.get('reason','')).strip() or not references(f) for f in facts):
         raise ValueError('关键史实核对无效')
-    if (bool(raw['critical_factual_issues'])!=flags['factual_error'] or (raw['factual_status']=='issues')!=flags['factual_error'] or (raw['constraint_status']=='violated')!=flags['task_constraint_violation']):raise ValueError('关键问题判断自相矛盾')
+    if ((raw['factual_status'] != 'uncertain' and bool(raw['critical_factual_issues']) != flags['factual_error'])
+            or (raw['factual_status']=='issues')!=flags['factual_error']
+            or (raw['constraint_status']=='violated')!=flags['task_constraint_violation']):
+        raise ValueError('关键问题判断自相矛盾')
     return raw
+
+
+def normalize_grounded_flags(raw):
+    """Keep independent evidence checks; derive redundant flags from the judgment."""
+    if raw.get('answer_status') != 'answered':
+        return []
+    reasons = []
+    if raw.get('needs_review') is None:
+        raw['needs_review'] = True
+        reasons.append('模型未给出是否需要复核的判断，分数仅供核对')
+    flags = raw.get('problem_flags')
+    if isinstance(flags, dict):
+        conflicts = {}
+        for key, field, values, positive in (
+            ('factual_error', 'factual_status', ('clear', 'issues', 'uncertain'), 'issues'),
+            ('task_constraint_violation', 'constraint_status', ('met', 'violated', 'uncertain'), 'violated'),
+        ):
+            if raw.get(field) not in values:
+                continue
+            value = raw[field] == positive
+            if key in flags and flags[key] is not value:
+                conflicts[key] = flags[key]
+            flags[key] = value
+        if conflicts:
+            raw['reported_conflicting_flags'] = conflicts
+            raw['needs_review'] = True
+            reasons.append('模型的关键判断与重复标记不一致，分数仅供核对')
+    return reasons
 
 
 def normalize(payload,questions,photo_count, *, grounded=False):
@@ -128,6 +159,7 @@ def normalize(payload,questions,photo_count, *, grounded=False):
     for q in questions:
         raw = copy.deepcopy(mapped[q['id']])
         config = ready(q)
+        review_reasons = normalize_grounded_flags(raw) if grounded else []
         if config.get('aggregation') == 'sum_projects':
             normalize_project_scores(raw, config)
         check(raw, q, photo_count, grounded=grounded)
@@ -139,6 +171,7 @@ def normalize(payload,questions,photo_count, *, grounded=False):
             suggested_total=raw.get('suggested_total'),max_total=q['max_score'],criteria=[],blocked=uncertain,
             needs_review=uncertain,block_reasons=['小论文存在未解决判断'] if uncertain else [],summary=raw.get('summary',''),
             holistic_result=raw,holistic_source=copy.deepcopy(q),photo_count=photo_count)
+        item['block_reasons'].extend(review_reasons)
         if 'reported_project_total' in raw:
             item['block_reasons'].append('模型报告的总分与分项合计不一致，已按分项重算，需教师复核')
         if state=='unanswered_candidate':

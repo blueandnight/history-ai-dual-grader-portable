@@ -3546,11 +3546,17 @@ def process_submission(submission_id: str) -> None:
             next_batch_submission_id = None
             if batch_id:
                 sequence = int(row["batch_sequence"] or 0)
-                # Persist a failure at the current cursor and do not allow a
-                # later sequence to reach the model until a teacher retries or skips.
+                # A mixed request may report fragments outside its own scoring
+                # scope even when all expected questions have been identified.
+                needs_mapping = bool(result.get("requires_question_mapping"))
+                questions = result.get("sub_questions", [])
+                if needs_mapping and any(item.get("scoring_mode") == "holistic" for item in questions):
+                    needs_mapping = bool(result.get("unmapped_answers")) and any(
+                        item.get("answer_status") == "question_unmatched" for item in questions
+                    )
                 batch_failed = result.get("mode") in {
                     "vision-model-error", "image-quality-error", "processing-error", "rules-demo"
-                } or bool(result.get("requires_question_mapping"))
+                } or needs_mapping
                 if batch_failed:
                     pause_reason = (
                         "匿名批改未完成；等待教师原位重试或确认跳过"

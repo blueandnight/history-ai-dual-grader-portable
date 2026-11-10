@@ -161,6 +161,43 @@ class FormalBatchWorkflowTests(unittest.TestCase):
         self.assertEqual(json.loads(row['result_json'])['diagnostics']['grading_input_mode'], 'original_photo')
         self.assertFalse((app.DATA_DIR/'student_auto_crop').exists())
 
+    def test_mixed_batch_advances_for_known_questions_but_pauses_for_remappable_mismatch(self):
+        for ordinary_state, expected in (('unanswered_candidate', ('active', 2)), ('question_unmatched', ('paused', 1))):
+            with self.subTest(ordinary_state=ordinary_state):
+                body, preview = self.original_preview()
+                status, batch = self.request('/api/batches', {
+                    'assignment_id': self.assignment_id, 'exam_id': self.exam_id,
+                    'grading_input_mode': 'original_photo', 'batch_request_id': ordinary_state,
+                    'items': [{'page_count': 1}, {'page_count': 1}],
+                })
+                self.assertEqual(status, 201, batch)
+                sid = batch['items'][0]['submission_id']
+                status, uploaded = self.request('/api/submissions', {
+                    **body, 'batch_id': batch['batch_id'], 'sequence': 1, 'submission_id': sid,
+                    'ai_privacy_confirmed': True, 'privacy_status': 'no_identity_visible',
+                    'ai_privacy_preview_token': preview['preview_token'],
+                })
+                self.assertEqual(status, 202, uploaded)
+                review = dict(self.fixture.mock_result('vision-model'), requires_question_mapping=True,
+                              block_reasons=['评分校验未通过'],
+                              unmapped_answers=[{'answer_id': 'A1'}], sub_questions=[
+                                  {'sub_question_id': 'Q17.1', 'answer_status': ordinary_state, 'criteria': []},
+                                  {'sub_question_id': 'Q17.2', 'answer_status': 'scoring_invalid',
+                                   'scoring_mode': 'holistic', 'criteria': [], 'blocked': True,
+                                   'needs_review': True, 'block_reasons': ['评分校验未通过']},
+                              ])
+                with patch.object(app, 'grade_submission', return_value=review) as grade:
+                    app.process_submission(sid)
+                grade.assert_called_once()
+                with closing(app.get_db()) as c:
+                    cursor = c.execute('SELECT status,next_sequence FROM grading_batches WHERE id=?', (batch['batch_id'],)).fetchone()
+                    self.assertEqual(tuple(cursor), expected)
+                    saved = c.execute('SELECT state,result_json,confirmed_at FROM submissions WHERE id=?', (sid,)).fetchone()
+                    self.assertEqual(saved['state'], 'completed')
+                    self.assertTrue(json.loads(saved['result_json'])['blocked'])
+                    self.assertFalse(saved['confirmed_at'])
+        self.provider.assert_not_called()
+
     def test_original_mode_is_signed_and_cannot_claim_crops(self):
         body, preview = self.original_preview()
         claims = app._read_preview_claims(preview['preview_token'])
