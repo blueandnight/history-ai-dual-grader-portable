@@ -225,17 +225,18 @@ def regions_for(regions,questions):
     return [{**r,'sub_question_ids':[x for x in r['sub_question_ids'] if x in ids]} for r in regions or [] if ids.intersection(r.get('sub_question_ids',[]))]
 
 
-def build_prompt(ordinary_builder,assignment_question,questions,answer_text='',**kwargs):
+def build_prompt(ordinary_builder,assignment_question,questions,answer_text='',*,grounding_protocol=None,**kwargs):
     parts=groups(questions)
     if len(parts)>1:
-        return json.dumps(dict(scoring_plan_version='mixed-grading-v1',requests=[dict(question_ids=[q['id'] for q in group],prompt=build_prompt(ordinary_builder,assignment_question,group,answer_text,**{**kwargs,'answer_regions':regions_for(kwargs.get('answer_regions'),group) or None})) for group in parts]),ensure_ascii=False,sort_keys=True)
+        return json.dumps(dict(scoring_plan_version='mixed-grading-v1',requests=[dict(question_ids=[q['id'] for q in group],prompt=build_prompt(ordinary_builder,assignment_question,group,answer_text,grounding_protocol=grounding_protocol,**{**kwargs,'answer_regions':regions_for(kwargs.get('answer_regions'),group) or None})) for group in parts]),ensure_ascii=False,sort_keys=True)
     if parts and questions[0].get('scoring_mode') == 'holistic':
-        from open_response_grounding import plan
+        from open_response_grounding import REFERENCE_PROTOCOL, plan
         regions = [{key: value for key, value in region.items()
                     if key not in ('approved_model_sha256', 'approved_prompt_sha256')}
                    for region in kwargs.get('answer_regions') or []]
         prompt_options = {**kwargs, 'answer_regions': regions}
-        return plan(prompt(assignment_question, questions, answer_text, **prompt_options), questions, regions)
+        return plan(prompt(assignment_question, questions, answer_text, **prompt_options), questions, regions,
+                    protocol=grounding_protocol or REFERENCE_PROTOCOL)
     return ordinary_builder(assignment_question,questions,answer_text,**kwargs)
 
 
@@ -263,20 +264,9 @@ def normalize_project_scores(raw, config):
     if raw.get('answer_status') != 'answered':
         return
 
-    for project in config['projects']:
-        for result in raw.get('dimension_assessments') or []:
-            if result.get('dimension_id') != project['id'] or result.get('level_id') is not None:
-                continue
-            score = result.get('score')
-            if not _finite(score):
-                continue
-            levels = [level for level in project['levels'] if level['min_score'] <= score <= level['max_score']]
-            if len(levels) == 1:
-                result['level_id'] = levels[0]['id']
-
     if type(raw.get('needs_review')) is not bool:
         raise ValueError('分档评分状态无效')
-    total = project_score_sum(raw, config)
+    total = project_score_sum(raw, config, infer_level=True)
     reported = raw.get('suggested_total')
     if not _finite(reported) or abs(reported - total) > 1e-9:
         raw['reported_project_total'] = reported
@@ -284,7 +274,7 @@ def normalize_project_scores(raw, config):
         raw['needs_review'] = True
 
 
-def project_score_sum(raw,config):
+def project_score_sum(raw, config, *, infer_level=False):
     if raw.get('level_id') is not None:raise ValueError('项目计分不应生成整题档次')
     dims=raw.get('dimension_assessments')
     if not isinstance(dims,list) or len(dims)!=len(config['projects']):raise ValueError('项目评分不完整')
@@ -292,8 +282,17 @@ def project_score_sum(raw,config):
     for p in config['projects']:
         matches=[d for d in dims if d.get('dimension_id')==p['id']]
         if len(matches)!=1:raise ValueError('项目编号缺失或重复')
-        d=matches[0];level=next((v for v in p['levels'] if v['id']==d.get('level_id')),None);score=d.get('score')
-        if not level or not _finite(score) or not level['min_score']<=score<=level['max_score'] or Decimal(str(score))%Decimal(str(p['score_step']))!=0:raise ValueError('项目分数与档次或步长不符')
+        item = matches[0]
+        score = item.get('score')
+        level_id = item.get('level_id')
+        if not _finite(score) or Decimal(str(score)) % Decimal(str(p['score_step'])) != 0:
+            raise ValueError('项目分数与档次或步长不符')
+        levels = [level for level in p['levels'] if level['min_score'] <= score <= level['max_score']
+                  and (level['id'] == level_id or (infer_level and level_id is None))]
+        if len(levels) != 1:
+            raise ValueError('项目分数与档次或步长不符')
+        if infer_level and level_id is None:
+            item['level_id'] = levels[0]['id']
         total+=score
     return total
 

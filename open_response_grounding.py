@@ -4,6 +4,7 @@ import json
 import math
 import re
 import unicodedata
+from decimal import Decimal
 
 from grading_core import normalize_evidence_box
 
@@ -17,8 +18,11 @@ SCORE_RULES = (
     '在没有可核查史实的作答中允许 fact_checks=[]，不要编写学生未使用的史实。'
 )
 
+REFERENCE_PROTOCOL = 'transcribe-then-score-v2'
+LEGACY_PROTOCOL = 'transcribe-then-score-v1'
 
-def plan(scoring_prompt, questions, regions):
+
+def plan(scoring_prompt, questions, regions, *, protocol=REFERENCE_PROTOCOL):
     # Only identifiers and geometry go to the transcription step.
     targets = [dict(photo_index=r.get('photo_index'), sub_question_ids=r.get('sub_question_ids'),
                     x=r.get('x'), y=r.get('y'), width=r.get('width'), height=r.get('height'))
@@ -43,8 +47,52 @@ def plan(scoring_prompt, questions, regions):
         'evidence数组每项包含id、student_quote及location（photo_index为1起始页序，x/y/width/height为图片内0至1位置）。',
         'evidence数组每项包含id、student_quote及line_id。',
     ).replace('证据必须是实际学生作答原文及图片内可定位的位置', '证据必须是转写行中可定位的学生原文')
-    return json.dumps(dict(protocol='transcribe-then-score-v1', transcription_prompt=transcription_prompt,
-                           scoring_prompt=scoring_prompt + SCORE_RULES), ensure_ascii=False, sort_keys=True)
+    rules = SCORE_RULES
+    if protocol == REFERENCE_PROTOCOL:
+        header, separator, body = scoring_prompt.partition('\n')
+        header = header.replace(
+            'evidence数组每项包含id、student_quote及line_id。',
+            'evidence每项填写id和line_id；默认引用整行。若只引用行内一段，可同时填写start和end（字符下标从0开始，end不包含）。不要抄写student_quote。',
+        ).replace(
+            'fact_checks数组每项含student_quote、judgment（correct/incorrect/uncertain）、reason、evidence_ids，',
+            'fact_checks数组每项含judgment（correct/incorrect/uncertain）、reason、evidence_ids（已有证据编号），不填student_quote，',
+        ).replace(
+            'problem_flags必须包含factual_error,off_topic,unsupported_argument,task_constraint_violation,evidence_uncertain，',
+            'problem_flags只填off_topic、unsupported_argument、evidence_uncertain；史实和设问限制只用factual_status、constraint_status填写，',
+        ).replace(
+            'critical_factual_issues字符串数组，', '',
+        ).replace(
+            'strengths、weaknesses、critical_factual_issues、problem_flags',
+            'strengths、weaknesses、problem_flags',
+        )
+        rules = rules.replace(
+            '每条 evidence 必须给出 line_id 和该行实际存在的逐字短引文 student_quote，'
+            '不输出位置框，程序从转写定位。fact_checks 的引文必须来自其引用的证据。',
+            '证据原文和位置由程序从引用行提取。史实核对只引用能支持判断的证据编号。',
+        )
+        if questions and (questions[0].get('holistic') or {}).get('aggregation') == 'sum_projects':
+            payload = json.loads(body)
+            for question in payload['questions']:
+                for project in question['projects']:
+                    step = Decimal(str(project['score_step']))
+                    for level in project['levels']:
+                        low = Decimal(str(level['min_score']))
+                        high = Decimal(str(level['max_score']))
+                        if high - low <= 30 * step:
+                            level['allowed_scores'] = [
+                                float(low + step * index) for index in range(int((high - low) / step) + 1)
+                            ]
+            body = json.dumps(payload, ensure_ascii=False)
+            header = header.replace(
+                '整题level_id必须null。dimension_assessments逐项包含dimension_id、judgment、reason、evidence_ids、level_id及score。suggested_total必须等于项目score之和。',
+                'dimension_assessments逐项包含dimension_id、judgment、reason、evidence_ids及score。'
+                '每项从该项目各档的allowed_scores选择一个数字；若未列举，则遵循档次范围及步长。'
+                '不要填项目或整题level_id，也不要填suggested_total，程序根据分数匹配唯一档次并求和。',
+            ).replace('answered需返回level_id、suggested_total、所有dimension_id', 'answered需返回所有dimension_id')
+            rules = rules.replace('各项目及总分为0（整体分档选择包含0分的档）', '各项目选择0分')
+        scoring_prompt = header + separator + body
+    return json.dumps(dict(protocol=protocol, transcription_prompt=transcription_prompt,
+                           scoring_prompt=scoring_prompt + rules), ensure_ascii=False, sort_keys=True)
 
 
 def by_question(payload, expected):
@@ -148,7 +196,7 @@ def _fact_quote_matches(quote, evidence, lines, line_positions):
     return False
 
 
-def _ground_evidence(raw, transcript):
+def _ground_evidence(raw, transcript, *, references=False):
     transcript_lines = transcript['lines']
     lines = {line['id']: line for line in transcript_lines}
     line_positions = {line['id']: index for index, line in enumerate(transcript_lines)}
@@ -159,6 +207,15 @@ def _ground_evidence(raw, transcript):
     for entry in evidence:
         line_id = entry.get('line_id') if isinstance(entry, dict) else None
         line = lines.get(line_id) if isinstance(line_id, str) else None
+        if references and line and ('student_quote' not in entry or 'start' in entry or 'end' in entry):
+            source = line['text']
+            start, end = entry.get('start', 0), entry.get('end', len(source))
+            if ('start' in entry) != ('end' in entry) or type(start) is not int or type(end) is not int or not 0 <= start < end <= len(source):
+                raise ValueError('开放题引用范围超出对应的答卷转写行')
+            quote = source[start:end]
+            if 'student_quote' in entry and entry['student_quote'] != quote:
+                raise ValueError('开放题引文与选定的答卷转写范围不一致')
+            entry['student_quote'] = quote
         if not line or not _quote_matches(entry.get('student_quote'), line['text']):
             raise ValueError('开放题评分引文不在对应的答卷转写行中')
         entry['location'] = copy.deepcopy(line['location'])
@@ -166,6 +223,12 @@ def _ground_evidence(raw, transcript):
             raise ValueError('开放题证据编号无效或重复')
         by_id[entry['id']] = entry
     for fact in raw.get('fact_checks', []):
+        if references and isinstance(fact, dict) and 'student_quote' not in fact:
+            ids = fact.get('evidence_ids')
+            if not isinstance(ids, list) or not ids or any(not isinstance(eid, str) or eid not in by_id for eid in ids):
+                raise ValueError('开放题史实判断引用了无效证据编号')
+            fact['student_quote'] = ' … '.join(by_id[eid]['student_quote'] for eid in dict.fromkeys(ids))
+            continue
         if not any(eid in by_id and _fact_quote_matches(fact.get('student_quote'), by_id[eid], transcript_lines, line_positions)
                    for eid in fact.get('evidence_ids', [])):
             raise ValueError('开放题史实判断的引文不在已核验的作答证据中')
@@ -178,8 +241,8 @@ def _unscored(question, transcript, status, summary):
                 question_matched=transcript['question_matched'])
 
 
-def normalize_grounded(payload, questions, transcribed, photo_count):
-    from holistic_scoring import normalize
+def normalize_grounded(payload, questions, transcribed, photo_count, *, protocol=LEGACY_PROTOCOL):
+    from holistic_scoring import normalize, ready, project_score_sum
     readable = [qid for qid, item in transcribed.items() if item['status'] == 'readable']
     scores = by_question(payload, readable)
     outputs = []
@@ -197,7 +260,24 @@ def normalize_grounded(payload, questions, transcribed, photo_count):
             try:
                 if raw.get('answer_status') != 'answered':
                     raise ValueError('评分状态与已转写作答不一致')
-                _ground_evidence(raw, transcript)
+                references = protocol == REFERENCE_PROTOCOL
+                _ground_evidence(raw, transcript, references=references)
+                if references:
+                    config = ready(question)
+                    if config.get('aggregation') == 'sum_projects' and 'suggested_total' not in raw:
+                        raw['suggested_total'] = project_score_sum(raw, config, infer_level=True)
+                    incorrect_facts = [
+                        fact for fact in raw.get('fact_checks', []) if fact.get('judgment') == 'incorrect'
+                    ]
+                    factual_status = raw.get('factual_status')
+                    if 'critical_factual_issues' not in raw:
+                        raw['critical_factual_issues'] = [
+                            fact['reason'] for fact in incorrect_facts if factual_status != 'clear'
+                        ]
+                    if ((factual_status == 'clear' and incorrect_facts)
+                            or (factual_status == 'issues' and not incorrect_facts)):
+                        raw['needs_review'] = True
+                        raw['factual_judgment_conflict'] = True
                 result = normalize({'sub_questions': [raw]}, [question], photo_count, grounded=True)
                 item = result['sub_questions'][0]
                 score = item['suggested_total']
@@ -208,6 +288,8 @@ def normalize_grounded(payload, questions, transcribed, photo_count):
                 raw = _unscored(question, transcript, 'scoring_invalid', '开放题评分结果未通过校验')
             else:
                 item['transcription'] = transcript
+                if raw.get('factual_judgment_conflict'):
+                    item['block_reasons'].append('总体史实判断与逐条证据判断冲突，分数仅供核对')
                 if transcript['review_only']:
                     item['blocked'] = True
                     item['needs_review'] = True

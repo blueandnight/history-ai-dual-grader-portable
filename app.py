@@ -6323,17 +6323,36 @@ def build_scoring_prompt_text(*args, **kwargs):
     return build_prompt(build_vision_prompt_text, *args, **kwargs)
 
 
+def _approved_scoring_prompt(expected_hashes, *args, **kwargs):
+    """Keep already-approved work on its signed protocol across upgrades."""
+    from open_response_grounding import LEGACY_PROTOCOL, REFERENCE_PROTOCOL
+    if len(expected_hashes) == 1:
+        expected = next(iter(expected_hashes))
+        for protocol in (REFERENCE_PROTOCOL, LEGACY_PROTOCOL):
+            prompt = build_scoring_prompt_text(*args, grounding_protocol=protocol, **kwargs)
+            if secrets.compare_digest(hashlib.sha256(prompt.encode('utf-8')).hexdigest(), expected):
+                return prompt, protocol
+    raise ValueError("云端批改提示词已偏离教师确认的 AI Payload，已阻止模型请求")
+
+
 def _call_mixed_vision(assignment,questions,answer_text,paths,diagnostics,photos,privacy_confirmed,regions,anonymous_mode,mapping,model_config,diagnostic_run,invocation_scope):
     import holistic_scoring as hs
     privacy=cloud_mode_enabled() or anonymous_mode
-    plan=build_scoring_prompt_text(str(assignment['question']),questions,answer_text,privacy_mode=privacy,answer_regions=regions or None,question_mapping=mapping)
+    prompt_args = (str(assignment['question']), questions, answer_text)
+    prompt_options = dict(privacy_mode=privacy, answer_regions=regions or None, question_mapping=mapping)
+    protocol = None
+    if privacy:
+        if not privacy_confirmed or len(paths) != len(photos or []):
+            raise ValueError('混合评分计划与已确认隐私预览不一致')
+        expected = {str(p.get('approved_prompt_sha256', '')) for p in photos or []}
+        plan, protocol = _approved_scoring_prompt(expected, *prompt_args, **prompt_options)
+    else:
+        plan = build_scoring_prompt_text(*prompt_args, **prompt_options)
     plan_hash=hashlib.sha256(plan.encode()).hexdigest()
-    if privacy and (not privacy_confirmed or len(paths)!=len(photos or []) or any(p.get('approved_prompt_sha256')!=plan_hash for p in photos or [])):
-        raise ValueError('混合评分计划与已确认隐私预览不一致')
     outputs=[];runs=[]
     for group in hs.groups(questions):
         selected=hs.regions_for(regions,group)
-        text=build_scoring_prompt_text(str(assignment['question']),group,answer_text,privacy_mode=privacy,answer_regions=selected or None,question_mapping=mapping)
+        text=build_scoring_prompt_text(str(assignment['question']),group,answer_text,privacy_mode=privacy,answer_regions=selected or None,question_mapping=mapping,grounding_protocol=protocol)
         group_hash=hashlib.sha256(text.encode()).hexdigest()
         # Derive subrequest hashes only after authenticating the complete plan.
         group_photos=[{**p,'approved_prompt_sha256':group_hash} for p in photos or []]
@@ -6786,26 +6805,22 @@ def call_vision_model(
     invocation_scope = str(invocation_scope or "whole_paper").strip()
     if invocation_scope not in INVOCATION_SCOPES:
         raise ValueError("模型调用范围无效")
-    prompt_text = build_scoring_prompt_text(
-        str(assignment["question"]),
-        sub_questions,
-        answer_text,
+    prompt_args = (str(assignment["question"]), sub_questions, answer_text)
+    prompt_options = dict(
         privacy_mode=privacy_mode,
         answer_regions=normalized_regions or None,
         question_mapping=question_mapping,
     )
     if privacy_mode:
-        actual_prompt_hash = hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
         if invocation_scope == "answer_region" and len(normalized_regions) == 1:
             expected_prompt_hashes = {str(normalized_regions[0].get("approved_prompt_sha256", ""))}
         else:
             expected_prompt_hashes = {
                 str(item.get("approved_prompt_sha256", "")) for item in (photo_meta or [])
             }
-        if len(expected_prompt_hashes) != 1 or not secrets.compare_digest(
-            actual_prompt_hash, next(iter(expected_prompt_hashes))
-        ):
-            raise ValueError("云端批改提示词已偏离教师确认的 AI Payload，已阻止模型请求")
+        prompt_text, _ = _approved_scoring_prompt(expected_prompt_hashes, *prompt_args, **prompt_options)
+    else:
+        prompt_text = build_scoring_prompt_text(*prompt_args, **prompt_options)
     grounded = bool(sub_questions and sub_questions[0].get("scoring_mode") == "holistic")
     essay_plan = json.loads(prompt_text) if grounded else None
     user_content: list[dict[str, Any]] = [{"type": "text", "text": essay_plan["transcription_prompt"] if grounded else prompt_text}]
@@ -7068,7 +7083,8 @@ def call_vision_model(
     try:
         if grounded:
             from open_response_grounding import normalize_grounded
-            normalized = normalize_grounded(parser_output, sub_questions, transcribed, len(outbound_images))
+            normalized = normalize_grounded(parser_output, sub_questions, transcribed, len(outbound_images),
+                                            protocol=essay_plan['protocol'])
         else:
             normalized = normalize_sub_question_result(parser_output, sub_questions, len(photo_paths))
         if anonymous_mode:
@@ -9600,6 +9616,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     "SELECT id, exam_id, assignment_id, class_name, total_sequences, next_sequence, status, pause_sequence, pause_reason, manifest_json, created_at, updated_at "
                     "FROM grading_batches" + (' WHERE '+' AND '.join(filters) if filters else '') + " ORDER BY created_at DESC LIMIT 100", values
                 ).fetchall()
+                from batch_grading_control import confirmed_pause
                 batches = []
                 for row in rows:
                     manifest = json.loads(row["manifest_json"] or "{}")
@@ -9621,6 +9638,7 @@ class AppHandler(BaseHTTPRequestHandler):
                         "pause_sequence": row["pause_sequence"],
                         "pause_reason": row["pause_reason"],
                         "grading_stopped": bool(manifest.get('grading_stop_requested')),
+                        "can_continue_confirmed": confirmed_pause(conn, row) is not None,
                         "items": [] if summary_only else manifest.get("items", []),
                         "created_at": row["created_at"],
                         "updated_at": row["updated_at"],
@@ -11695,8 +11713,8 @@ class AppHandler(BaseHTTPRequestHandler):
             raise ValueError('请明确确认停止或继续本批剩余批改')
         conn = get_db()
         try:
-            result = change(conn, str(payload.get('batch_id') or ''), str(payload.get('assignment_id') or ''), str(payload.get('exam_id') or ''), payload.get('action'), utc_now, append_audit_event, actor=getattr(getattr(self, '_web_auth_session', None), 'username', '') or 'local')
-            next_id = _enqueue_current_batch_submission(conn, result['batch_id']) if payload.get('action') == 'resume' else None
+            result = change(conn, str(payload.get('batch_id') or ''), str(payload.get('assignment_id') or ''), str(payload.get('exam_id') or ''), payload.get('action'), utc_now, append_audit_event, actor=getattr(getattr(self, '_web_auth_session', None), 'username', '') or 'local', expected_sequence=payload.get('expected_sequence'))
+            next_id = _enqueue_current_batch_submission(conn, result['batch_id']) if payload.get('action') in {'resume', 'continue_confirmed'} else None
             conn.commit()
         finally:
             conn.close()

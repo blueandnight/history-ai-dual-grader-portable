@@ -1,9 +1,12 @@
 """Regression for off-topic answers and invented evidence, using synthetic text."""
 import copy
+import hashlib
+import json
 import unittest
 
+import app
 import holistic_scoring as hs
-from open_response_grounding import normalize_grounded, transcriptions
+from open_response_grounding import LEGACY_PROTOCOL, REFERENCE_PROTOCOL, normalize_grounded, transcriptions
 from tests import test_project_scoring as fixtures
 
 
@@ -133,3 +136,79 @@ class GroundingTests(unittest.TestCase):
         b = self.grade(item, self.transcript('地方治理与朝廷有关。'))
         self.assertEqual(a['suggested_total'], 1)
         self.assertIn('holistic_transcription_disagreement', hs.compare(a, b))
+
+    def test_reference_response_uses_original_text_and_valid_project_choices(self):
+        item = copy.deepcopy(self.item)
+        item.pop('suggested_total')
+        for dimension in item['dimension_assessments']:
+            dimension.pop('level_id')
+        item['problem_flags'].pop('factual_error')
+        item['problem_flags'].pop('task_constraint_violation')
+        item.pop('critical_factual_issues')
+        item['problem_flags']['off_topic'] = False
+        item['dimension_assessments'][0].update(score=1, judgment='met')
+        evidence = item['evidence'][0]
+        evidence.pop('student_quote')
+        evidence.update(start=0, end=4)
+        item['fact_checks'] = [dict(judgment='correct', reason='按原文核对', evidence_ids=[evidence['id']])]
+
+        def grade(raw):
+            return normalize_grounded({'sub_questions': [raw]}, [self.question], self.transcript(), 1,
+                                      protocol=REFERENCE_PROTOCOL)['sub_questions'][0]
+
+        score = grade(item)
+        saved = score['holistic_result']
+        self.assertTrue(hs.valid_sub(score, self.question))
+        self.assertEqual(score['suggested_total'], 1)
+        self.assertEqual(saved['dimension_assessments'][0]['level_id'], 'range')
+        self.assertEqual(saved['evidence'][0]['student_quote'], self.text[:4])
+        self.assertEqual(saved['fact_checks'][0]['student_quote'], self.text[:4])
+        self.assertFalse(saved['problem_flags']['factual_error'])
+
+        for field, bad in (
+            ('span', len(self.text) + 1), ('evidence_id', ['unknown']),
+            ('score', .5), ('score', 3), ('level', 'unknown'),
+        ):
+            with self.subTest(field=field, value=bad):
+                invalid = copy.deepcopy(item)
+                if field == 'span':
+                    invalid['evidence'][0]['end'] = bad
+                elif field == 'evidence_id':
+                    invalid['fact_checks'][0]['evidence_ids'] = bad
+                else:
+                    invalid['dimension_assessments'][0]['level_id' if field == 'level' else 'score'] = bad
+                self.assertEqual(grade(invalid)['answer_status'], 'scoring_invalid')
+
+        item['fact_checks'][0]['judgment'] = 'incorrect'
+        disputed = grade(item)
+        self.assertEqual(disputed['suggested_total'], 1)
+        self.assertTrue(disputed['blocked'])
+        self.assertFalse(hs.valid_sub(disputed, self.question))
+        item['factual_status'] = 'issues'
+        supported = grade(item)['holistic_result']
+        self.assertEqual(supported['critical_factual_issues'], ['按原文核对'])
+        self.assertTrue(supported['problem_flags']['factual_error'])
+
+    def test_new_preview_publishes_allowed_choices_and_accepts_existing_signed_plan(self):
+        for questions in ([self.question], fixtures.project_questions()):
+            args = ('合成考试', questions)
+            legacy = app.build_scoring_prompt_text(*args, privacy_mode=True, grounding_protocol=LEGACY_PROTOCOL)
+            current = app.build_scoring_prompt_text(*args, privacy_mode=True)
+            self.assertNotEqual(legacy, current)
+            plan = json.loads(current)
+            if 'requests' in plan:
+                plan = json.loads(plan['requests'][0]['prompt'])
+            self.assertEqual(plan['protocol'], REFERENCE_PROTOCOL)
+            header, body = plan['scoring_prompt'].split('\n', 1)
+            self.assertIn('不要抄写student_quote', header)
+            self.assertIn('程序根据分数匹配唯一档次并求和', header)
+            self.assertNotIn('problem_flags必须包含factual_error', header)
+            self.assertNotIn('critical_factual_issues', header)
+            settings, _ = json.JSONDecoder().raw_decode(body)
+            first = settings['questions'][0]['projects'][0]['levels'][0]
+            self.assertEqual(first['allowed_scores'], [0, 1])
+            for preview, protocol in ((legacy, LEGACY_PROTOCOL), (current, REFERENCE_PROTOCOL)):
+                expected = {hashlib.sha256(preview.encode('utf-8')).hexdigest()}
+                self.assertEqual(app._approved_scoring_prompt(expected, *args, privacy_mode=True), (preview, protocol))
+            with self.assertRaisesRegex(ValueError, '偏离'):
+                app._approved_scoring_prompt({'f' * 64}, *args, privacy_mode=True)

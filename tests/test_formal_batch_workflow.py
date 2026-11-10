@@ -198,6 +198,60 @@ class FormalBatchWorkflowTests(unittest.TestCase):
                     self.assertFalse(saved['confirmed_at'])
         self.provider.assert_not_called()
 
+    def test_continue_after_teacher_confirmation_preserves_grade_and_enqueues_only_next(self):
+        status, batch = self.request('/api/batches', {
+            'assignment_id': self.assignment_id, 'exam_id': self.exam_id,
+            'grading_input_mode': 'original_photo', 'batch_request_id': 'continue-confirmed',
+            'items': [{'page_count': 1}] * 3,
+        })
+        self.assertEqual(status, 201, batch)
+        batch_id = batch['batch_id']
+        first, second, third = (item['submission_id'] for item in batch['items'])
+        for sequence, sid in enumerate((first, second, third), 1):
+            body, preview = self.original_preview()
+            status, uploaded = self.request('/api/submissions', {
+                **body, 'batch_id': batch_id, 'sequence': sequence, 'submission_id': sid,
+                'ai_privacy_confirmed': True, 'privacy_status': 'no_identity_visible',
+                'ai_privacy_preview_token': preview['preview_token'],
+            })
+            self.assertEqual(status, 202, uploaded)
+        result = self.fixture.mock_result('vision-model')
+        result.update(requires_question_mapping=True, unmapped_answers=[{'fragment_id': 'sample'}])
+        with patch.object(app, 'grade_submission', return_value=result):
+            app.process_submission(first)
+
+        def control(action='stop', **fields):
+            return self.request('/api/batches/grading-control', {
+                'batch_id': batch_id, 'assignment_id': self.assignment_id, 'exam_id': self.exam_id,
+                'action': action, 'confirmed': True, **fields,
+            })
+
+        def can_continue():
+            return self.fixture.get_json('/api/batches?batch_id=' + batch_id)['batches'][0]['can_continue_confirmed']
+
+        self.assertFalse(can_continue())
+        self.assertEqual(control('continue_confirmed', expected_sequence=1)[0], 400)
+        with closing(app.get_db()) as c, c:
+            c.execute("UPDATE submissions SET confirmed_at=?, final_total=0 WHERE id=?", (app.utc_now(), first))
+            before = tuple(c.execute("SELECT * FROM submissions WHERE id=?", (first,)).fetchone())
+        self.assertTrue(can_continue())
+        self.assertEqual(control('continue_confirmed', expected_sequence=2)[0], 400)
+        self.assertEqual(control()[0], 200)
+        self.assertFalse(can_continue())
+        self.assertEqual(control('continue_confirmed', expected_sequence=1)[0], 400)
+        self.assertEqual(control('resume')[0], 200)
+        app.enqueue_submission.reset_mock()
+        self.assertEqual(control('continue_confirmed', expected_sequence=1)[0], 200)
+        self.assertEqual(control('continue_confirmed', expected_sequence=1)[0], 400)
+        app.enqueue_submission.assert_called_once_with(second)
+        self.assertFalse(can_continue())
+        with closing(app.get_db()) as c:
+            self.assertEqual(before, tuple(c.execute("SELECT * FROM submissions WHERE id=?", (first,)).fetchone()))
+            self.assertEqual(tuple(c.execute("SELECT status,next_sequence,pause_sequence FROM grading_batches WHERE id=?", (batch_id,)).fetchone()), ('active', 2, None))
+            self.assertEqual(c.execute("SELECT state FROM task_queue WHERE submission_id=?", (third,)).fetchone()[0], 'waiting_batch')
+            self.assertEqual(c.execute("SELECT count(*) FROM audit_events WHERE entity_id=? AND event_type='grading_batch_continue_confirmed_requested'", (batch_id,)).fetchone()[0], 1)
+        self.provider.assert_not_called()
+
     def test_original_mode_is_signed_and_cannot_claim_crops(self):
         body, preview = self.original_preview()
         claims = app._read_preview_claims(preview['preview_token'])
