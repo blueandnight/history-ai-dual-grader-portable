@@ -18,6 +18,20 @@ class GradingPointDecisionSchema(BaseModel):
     reason: str | None = None
     needs_review: bool | None = None
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_evidence_list(cls, value):
+        if not isinstance(value, dict) or not isinstance(value.get("evidence"), list):
+            return value
+        boxes = value["evidence"]
+        if any(not isinstance(box, dict) for box in boxes):
+            return value
+        if len(boxes) <= 1:
+            return {**value, "evidence": boxes[0] if boxes else None}
+        # The scorer can attach only one box per point. Do not guess which
+        # box supports the quote or silently accept the point for adoption.
+        return {**value, "evidence": None, "needs_review": True}
+
 
 class GradingSubQuestionSchema(BaseModel):
     """One returned sub-question; semantic scoring remains outside this schema."""

@@ -20,6 +20,24 @@ SCORE_RULES = (
 
 REFERENCE_PROTOCOL = 'transcribe-then-score-v2'
 LEGACY_PROTOCOL = 'transcribe-then-score-v1'
+REFERENCE_FLAGS = ('off_topic', 'unsupported_argument', 'evidence_uncertain')
+
+
+def _normalize_reference_flags(raw):
+    flags = raw.get('problem_flags')
+    if not isinstance(flags, list):
+        return False
+    if (any(not isinstance(flag, str) or flag not in REFERENCE_FLAGS for flag in flags)
+            or len(flags) != len(set(flags))):
+        raise ValueError('关键问题标记无效')
+    normalized = {flag: flag in flags for flag in REFERENCE_FLAGS}
+    # Some responses also declare off_topic outside the list. Retain a
+    # positive declaration so formatting repair cannot bypass the zero gate.
+    if raw.get('off_topic') is True:
+        normalized['off_topic'] = True
+    raw['problem_flags'] = normalized
+    raw['needs_review'] = True
+    return True
 
 
 def plan(scoring_prompt, questions, regions, *, protocol=REFERENCE_PROTOCOL):
@@ -261,6 +279,7 @@ def normalize_grounded(payload, questions, transcribed, photo_count, *, protocol
                 if raw.get('answer_status') != 'answered':
                     raise ValueError('评分状态与已转写作答不一致')
                 references = protocol == REFERENCE_PROTOCOL
+                repaired_flags = references and _normalize_reference_flags(raw)
                 _ground_evidence(raw, transcript, references=references)
                 if references:
                     config = ready(question)
@@ -288,6 +307,8 @@ def normalize_grounded(payload, questions, transcribed, photo_count, *, protocol
                 raw = _unscored(question, transcript, 'scoring_invalid', '开放题评分结果未通过校验')
             else:
                 item['transcription'] = transcript
+                if repaired_flags:
+                    item['block_reasons'].append('模型以列表返回关键问题标记，分数仅供核对')
                 if raw.get('factual_judgment_conflict'):
                     item['block_reasons'].append('总体史实判断与逐条证据判断冲突，分数仅供核对')
                 if transcript['review_only']:

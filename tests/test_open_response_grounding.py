@@ -212,3 +212,22 @@ class GroundingTests(unittest.TestCase):
                 self.assertEqual(app._approved_scoring_prompt(expected, *args, privacy_mode=True), (preview, protocol))
             with self.assertRaisesRegex(ValueError, '偏离'):
                 app._approved_scoring_prompt({'f' * 64}, *args, privacy_mode=True)
+
+    def test_reference_flag_list_is_review_only_and_preserves_off_topic_gate(self):
+        item = copy.deepcopy(self.item)
+        item['problem_flags'] = ['unsupported_argument']
+        item['dimension_assessments'][0].update(score=1, judgment='met')
+        item['suggested_total'] = 1
+
+        def grade():
+            return normalize_grounded({'sub_questions': [item]}, [self.question], self.transcript(), 1,
+                                      protocol=REFERENCE_PROTOCOL)['sub_questions'][0]
+
+        result = grade()
+        self.assertEqual(result['suggested_total'], 1)
+        self.assertTrue(result['blocked'])
+        self.assertFalse(hs.valid_sub(result, self.question))
+        for flags, off_topic in (([], True), (['off_topic'], False), (['unknown'], False)):
+            with self.subTest(flags=flags, off_topic=off_topic):
+                item.update(problem_flags=flags, off_topic=off_topic)
+                self.assertEqual(grade()['answer_status'], 'scoring_invalid')

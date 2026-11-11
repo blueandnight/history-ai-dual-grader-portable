@@ -169,6 +169,26 @@ class HistoryGraderTests(unittest.TestCase):
         with self.assertRaises(Exception):
             app.parse_vision_model_output(json.dumps(invalid), diagnostic_test_sub_questions()[:1], 1)
 
+    def test_vision_evidence_array_preserves_single_box_and_requires_review_when_ambiguous(self):
+        response = diagnostic_test_response(("Q1",))
+        point = response["sub_questions"][0]["criteria"][0]
+        box = {"photo_index": 1, "x": 0.1, "y": 0.1, "width": 0.2, "height": 0.2}
+        point.update(suggested_score=1, decision="full", student_evidence="学生原文")
+        for boxes in ([box], [], [box, {**box, "x": 0.2}]):
+            with self.subTest(box_count=len(boxes)):
+                point["evidence"] = boxes
+                _, result = app.parse_vision_model_output(
+                    json.dumps(response), diagnostic_test_sub_questions()[:1], 1
+                )
+                question = result["sub_questions"][0]
+                normalized = question["criteria"][0]
+                if len(boxes) == 1:
+                    self.assertIsNotNone(normalized["evidence"])
+                else:
+                    self.assertIsNone(normalized["evidence"])
+                    self.assertTrue(normalized["needs_review"])
+                    self.assertTrue(question["blocked"])
+
     def test_http_response_ignores_client_disconnect(self):
         class BrokenWriter:
             def write(self, body):

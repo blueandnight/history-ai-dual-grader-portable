@@ -425,6 +425,15 @@ MODEL_PRESETS = {
         "note": "MiMo-V2.6-Flash OpenAI 兼容视觉模型；支持图像输入和 JSON 输出。",
         "experimental": False,
     },
+    "mimo-v26-pro": {
+        "label": "小米 MiMo-V2.6-Pro（视觉）",
+        "provider": "mimo",
+        "provider_label": "小米 MiMo",
+        "base_url": "https://api.xiaomimimo.com/v1",
+        "model": "mimo-v2.6-pro",
+        "note": "小米 MiMo 官方视觉模型，可用于与 Flash 对照试阅。",
+        "experimental": False,
+    },
     "qwen35-flash": {
         "label": "通义千问 Qwen3.5 Flash（视觉）",
         "provider": "qwen",
@@ -822,7 +831,7 @@ DUAL_REVIEW_MODEL_SPECS = {
 
 DUAL_REVIEW_DEFAULT_PRESETS = {"A": "deepseek-v41-flash", "B": "mimo-v26-flash"}
 DUAL_REVIEW_AVAILABLE_PRESETS = (
-    "deepseek-v41-flash", "mimo-v26-flash", "mimo-v25", "qwen35-flash", "qwen-vl-max", "glm-46v",
+    "deepseek-v41-flash", "mimo-v26-flash", "mimo-v26-pro", "mimo-v25", "qwen35-flash", "qwen-vl-max", "glm-46v",
     "openai-gpt-41", "openai-gpt-41-mini", "gemini-38-flash", "qwen38-max",
     "qwen35-plus", "qwen36-plus", "qwen37-plus", "qwen3-vl-plus",
     "gemini-31-pro-preview", "openai-gpt-54", "openai-gpt-54-mini",

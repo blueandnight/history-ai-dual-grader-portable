@@ -10,6 +10,7 @@ import app
 
 
 NEW_PRESETS = {
+    "mimo-v26-pro": "mimo-v2.6-pro",
     "qwen35-plus": "qwen3.5-plus",
     "qwen36-plus": "qwen3.6-plus",
     "qwen37-plus": "qwen3.7-plus",
@@ -32,7 +33,7 @@ class ModelCatalogExpansionTests(unittest.TestCase):
                         self.assertEqual(spec["model"], model)
                         self.assertEqual(spec["preset_id"], preset_id)
                         self.assertTrue(spec["api_origin"].startswith("https://"))
-            self.assertEqual(len(set(app.DUAL_REVIEW_AVAILABLE_PRESETS)), 17)
+            self.assertEqual(len(set(app.DUAL_REVIEW_AVAILABLE_PRESETS)), 18)
             self.assertTrue(app.MODEL_PRESETS["gemini-31-pro-preview"]["experimental"])
 
     def test_default_pair_and_existing_payload_options_are_preserved(self):
@@ -95,6 +96,10 @@ class ModelCatalogExpansionTests(unittest.TestCase):
                         self.assertIn("max_completion_tokens", payload)
                         self.assertNotIn("max_tokens", payload)
                         self.assertEqual(payload["temperature"], 0)
+                    elif preset["provider"] == "mimo":
+                        self.assertEqual(request.call_args.args[0].full_url, "https://api.xiaomimimo.com/v1/chat/completions")
+                        self.assertIn("max_completion_tokens", payload)
+                        self.assertNotIn("max_tokens", payload)
                     elif preset["provider"] == "openai":
                         self.assertIn("max_completion_tokens", payload)
                         self.assertNotIn("max_tokens", payload)
