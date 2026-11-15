@@ -1,5 +1,5 @@
 export type Question={scoring_mode?:string;level_a?:string;level_b?:string;holistic_reasons?:string[];id:string;max_score:number|null;a:number|null;b:number|null;point_conflict:boolean;blank_candidate?:boolean;blank_confirmed?:boolean;blank_auto?:boolean;a_status?:string;b_status?:string}
-export type Paper={id:string;exam_id:string;sequence?:number|null;label:string;state:string;progress_state?:string;reason:string;a:number|null;b:number|null;names:{A:string;B:string};max_score:number|null;questions:Question[];evidence_only?:boolean;model_issues?:{A:string;B:string};totals_complete?:{A:boolean;B:boolean};confirmation_method?:string;final_total?:number|null}
+export type Paper={id:string;exam_id:string;sequence?:number|null;label:string;state:string;progress_state?:string;reason:string;a:number|null;b:number|null;names:{A:string;B:string};max_score:number|null;questions:Question[];evidence_only?:boolean;can_rescore?:boolean;model_issues?:{A:string;B:string};totals_complete?:{A:boolean;B:boolean};confirmation_method?:string;final_total?:number|null}
 const finite=(v:unknown):v is number=>typeof v==='number'&&Number.isFinite(v)
 export function visibleTotal(p:Paper,side:'A'|'B'){
  const key=side==='A'?'a':'b',value=p[key]
@@ -7,6 +7,7 @@ export function visibleTotal(p:Paper,side:'A'|'B'){
  return finite(value)?value:null
 }
 export function answerNote(status?:string,confirmed=false){
+ if(status==='scoring_partial')return confirmed?'原AI结果：部分项目缺分':'部分项目缺分，待核对'
  if(status==='scoring_invalid')return confirmed?'原AI结果：评分校验未通过':'评分校验未通过，待核对'
  if(confirmed&&['unanswered_candidate','question_unmatched','image_unreadable','missing'].includes(status||''))return '原AI结果：'+({unanswered_candidate:'疑似空白',question_unmatched:'题号未匹配',image_unreadable:'图像读取异常',missing:'无小题评分'} as Record<string,string>)[status!]
  return ({unanswered_candidate:'疑似空白，待教师确认',question_unmatched:'题号未匹配，待核对',image_unreadable:'图像无法可靠读取',missing:'未获得小题评分',blank_confirmed:'已确认空白'} as Record<string,string>)[status||'']||''
@@ -14,13 +15,15 @@ export function answerNote(status?:string,confirmed=false){
 export function difference(a:number|null,b:number|null,conflict=false){return !finite(a)||!finite(b)?'结果不完整':a===b?(conflict?'同分，评分点判断不同':'一致'):`相差 ${Math.abs(a-b)} 分`}
 export function holisticReason(reason:string){return ({holistic_transcription_disagreement:'两模型转写不同，需核对原卷',holistic_invalid_result:'分档结果待核对',holistic_level_disagreement:'跨档分歧',holistic_score_disagreement:'档内分数不同',holistic_key_judgment_disagreement:'关键史实或设问判断不同',holistic_dimension_disagreement:'评价维度判断不同',holistic_fact_judgment_disagreement:'关键史实核对不同'} as Record<string,string>)[reason]||reason}
 export function questionDifference(q:Question,confirmed=false){
- if(q.scoring_mode==='holistic')return q.holistic_reasons?.length?q.holistic_reasons.map(holisticReason).join('；'):'分档判断一致'
+ if([q.a_status,q.b_status].includes('scoring_partial'))return '部分项目缺分'
  if(confirmed&&(!finite(q.a)||!finite(q.b)||[q.a_status,q.b_status].some(s=>['unanswered_candidate','question_unmatched','image_unreadable','missing'].includes(s||''))))return '原AI结果不完整'
  if(q.blank_auto)return '双模型明确空白，自动0分'
  if(q.blank_confirmed)return '空白已核对；保留原AI判断'
  if([q.a_status,q.b_status].includes('unanswered_candidate'))return '空白判断待核对'
  if([q.a_status,q.b_status].includes('question_unmatched'))return '题号待核对'
  if([q.a_status,q.b_status].includes('image_unreadable'))return '图像待核对'
+ if([q.a_status,q.b_status].includes('scoring_invalid'))return '评分校验未通过'
+ if(q.scoring_mode==='holistic'&&q.holistic_reasons?.length)return q.holistic_reasons.map(holisticReason).join('；')
  return difference(q.a,q.b,q.point_conflict)
 }
 export function statusLabel(p:Paper){return ({queued:'排队中',grading:'正在评分',paused:'批次暂停等待',recovery:'待人工恢复',failed:'处理失败',adoptable:'可批量采纳',review:'待复核',processing:'处理中',stopped:'已停止（未开始）',confirmed:'已确认'} as Record<string,string>)[p.progress_state||p.state]||p.state}
@@ -41,27 +44,32 @@ export function compactReason(p:Paper){
  if(p.state==='confirmed'||p.state==='adoptable')return ''
  if(needsRecovery(p))return p.progress_state==='paused'?'前序任务待处理':'请到本批恢复处理'
  if(p.state==='processing')return ''
- const issues=(['A','B'] as const).filter(s=>p.model_issues?.[s]).map(s=>p.names[s]+(p.model_issues![s].includes('内容过滤')?'内容过滤':'调用异常'))
+ const issues=(['A','B'] as const).filter(s=>p.model_issues?.[s]).map(s=>p.model_issues![s].startsWith('照片质量')?'照片需核对':p.names[s]+(p.model_issues![s].includes('内容过滤')?'内容过滤':'调用异常'))
  if(issues.length)return issues.join('、')
- const problems=p.questions.flatMap(q=>{
+ const problems=questionReviewReasons(p)
+ return problems.length>1?`${problems.length}处待核对`:problems[0]||'证据或评分状态待核对'
+}
+export function questionReviewReasons(p:Paper){
+ return p.questions.flatMap(q=>{
   const id=shortQuestion(q.id),states=[q.a_status,q.b_status]
-  if(q.scoring_mode==='holistic'&&q.holistic_reasons?.length)return q.holistic_reasons.map(r=>id+holisticReason(r))
+  if(states.includes('scoring_partial'))return [id+'部分项目缺分']
   if(q.blank_auto)return []
   if(q.blank_confirmed)return [id+'空白已核对，待终评']
   if(states.includes('unanswered_candidate'))return [id+'疑似空白']
   if(states.includes('question_unmatched'))return [id+'题号待核对']
   if(states.includes('image_unreadable'))return [id+'图像待核对']
+  if(states.includes('scoring_invalid'))return [id+'评分校验未通过']
+  if(q.scoring_mode==='holistic'&&q.holistic_reasons?.length)return q.holistic_reasons.map(r=>id+holisticReason(r))
   if(!finite(q.a)||!finite(q.b))return [id+'结果缺失']
   if(q.a!==q.b)return [id+`相差${Math.abs(q.a-q.b)}分`]
   if(q.point_conflict)return [id+'评分点分歧']
   return []
  })
- return problems.length>1?`${problems.length}处待核对`:problems[0]||'证据或评分状态待核对'
 }
 export function compactQuestionScore(q:Question,side:'a'|'b'){
  if(finite(q[side]))return String(q[side])+(q.scoring_mode==='holistic'?' · '+((side==='a'?q.level_a:q.level_b)||'—'):'')
  if(q.blank_confirmed&&q[side==='a'?'a_status':'b_status']==='unanswered_candidate')return '原疑似空白'
- return ({unanswered_candidate:'待确认',question_unmatched:'未匹配',image_unreadable:'看不清',scoring_invalid:'评分校验未通过'} as Record<string,string>)[q[side==='a'?'a_status':'b_status']||'']||'—'
+ return ({unanswered_candidate:'待确认',question_unmatched:'未匹配',image_unreadable:'看不清',scoring_invalid:'评分校验未通过',scoring_partial:'部分项目缺分'} as Record<string,string>)[q[side==='a'?'a_status':'b_status']||'']||'—'
 }
 
 export function reviewGroup(p:Paper){

@@ -40,6 +40,50 @@ def _normalize_reference_flags(raw):
     return True
 
 
+def _complete_reference_fields(raw):
+    """Fill reference-protocol fields a model omitted, without inventing evidence.
+
+    Reference responses are expected to carry only the three reference flags plus
+    factual_status/constraint_status. Models occasionally leave those judgements
+    out or return flags as a list; treating the gap as "uncertain" keeps the
+    suggested score reviewable instead of discarding an otherwise grounded result.
+    Unknown flag names are still rejected by _normalize_reference_flags.
+    """
+    from holistic_scoring import PROBLEMS
+    reasons = []
+    flags = raw.get('problem_flags')
+    if not isinstance(flags, dict):
+        flags = {}
+        reasons.append('模型没有按对象返回关键问题标记，已按未标记处理，分数仅供核对')
+    factual = raw.get('factual_status')
+    if factual not in ('clear', 'issues', 'uncertain'):
+        raw['factual_status'] = factual = 'uncertain'
+        reasons.append('模型没有给出总体史实核对结论，已按不确定处理，分数仅供核对')
+    constraint = raw.get('constraint_status')
+    if constraint not in ('met', 'violated', 'uncertain'):
+        raw['constraint_status'] = constraint = 'uncertain'
+        reasons.append('模型没有给出设问限制核对结论，已按不确定处理，分数仅供核对')
+    if not str(raw.get('constraint_reason') or '').strip():
+        raw['constraint_reason'] = '模型没有给出设问限制的核对说明'
+        reasons.append('模型没有给出设问限制说明，已按不确定处理，分数仅供核对')
+    completed = {}
+    for key in PROBLEMS:
+        value = flags.get(key)
+        if type(value) is bool:
+            completed[key] = value
+        elif key == 'factual_error':
+            completed[key] = factual == 'issues'
+        elif key == 'task_constraint_violation':
+            completed[key] = constraint == 'violated'
+        else:
+            completed[key] = False
+    raw['problem_flags'] = completed
+    if reasons:
+        raw['needs_review'] = True
+        raw['reference_field_repairs'] = reasons
+    return reasons
+
+
 def plan(scoring_prompt, questions, regions, *, protocol=REFERENCE_PROTOCOL):
     # Only identifiers and geometry go to the transcription step.
     targets = [dict(photo_index=r.get('photo_index'), sub_question_ids=r.get('sub_question_ids'),
@@ -222,6 +266,8 @@ def _ground_evidence(raw, transcript, *, references=False):
     if not isinstance(evidence, list) or not evidence:
         raise ValueError('开放题评分缺少可核对的原文引文')
     by_id = {}
+    repaired_references = False
+    repair_reasons = []
     for entry in evidence:
         line_id = entry.get('line_id') if isinstance(entry, dict) else None
         line = lines.get(line_id) if isinstance(line_id, str) else None
@@ -237,19 +283,52 @@ def _ground_evidence(raw, transcript, *, references=False):
         if not line or not _quote_matches(entry.get('student_quote'), line['text']):
             raise ValueError('开放题评分引文不在对应的答卷转写行中')
         entry['location'] = copy.deepcopy(line['location'])
-        if not isinstance(entry.get('id'), str) or not entry['id'] or entry['id'] in by_id:
-            raise ValueError('开放题证据编号无效或重复')
+        entry_id = entry.get('id')
+        if not isinstance(entry_id, str) or not entry_id or entry_id in by_id:
+            if (isinstance(entry_id, str) and entry_id in by_id
+                    and entry.get('line_id') == by_id[entry_id].get('line_id')
+                    and entry.get('student_quote') == by_id[entry_id].get('student_quote')):
+                # Identical evidence repeated under one id: keep the first entry.
+                continue
+            replacement = f'E{len(by_id) + 1}'
+            suffix = 1
+            while replacement in by_id:
+                suffix += 1
+                replacement = f'E{len(by_id) + suffix}'
+            entry['id'] = replacement
+            repair_reasons.append(
+                '模型重复使用了同一证据编号，已按出现顺序重新编号，分数仅供核对'
+            )
         by_id[entry['id']] = entry
+    def resolve_ids(ids):
+        nonlocal repaired_references
+        if not isinstance(ids, list) or any(not isinstance(eid, str) for eid in ids):
+            raise ValueError('开放题引用了无效证据编号')
+        resolved = []
+        for eid in ids:
+            if eid not in by_id:
+                matches = [key for key, entry in by_id.items() if entry['line_id'] == eid]
+                if len(matches) != 1:
+                    raise ValueError('开放题引用了无效证据编号')
+                eid = matches[0]
+                repaired_references = True
+            resolved.append(eid)
+        return list(dict.fromkeys(resolved))
+
+    if references:
+        for dimension in raw.get('dimension_assessments', []):
+            dimension['evidence_ids'] = resolve_ids(dimension.get('evidence_ids'))
     for fact in raw.get('fact_checks', []):
         if references and isinstance(fact, dict) and 'student_quote' not in fact:
-            ids = fact.get('evidence_ids')
-            if not isinstance(ids, list) or not ids or any(not isinstance(eid, str) or eid not in by_id for eid in ids):
+            fact['evidence_ids'] = resolve_ids(fact.get('evidence_ids'))
+            if not fact['evidence_ids']:
                 raise ValueError('开放题史实判断引用了无效证据编号')
-            fact['student_quote'] = ' … '.join(by_id[eid]['student_quote'] for eid in dict.fromkeys(ids))
+            fact['student_quote'] = ' … '.join(by_id[eid]['student_quote'] for eid in fact['evidence_ids'])
             continue
         if not any(eid in by_id and _fact_quote_matches(fact.get('student_quote'), by_id[eid], transcript_lines, line_positions)
                    for eid in fact.get('evidence_ids', [])):
             raise ValueError('开放题史实判断的引文不在已核验的作答证据中')
+    return repaired_references, repair_reasons
 
 
 def _unscored(question, transcript, status, summary):
@@ -260,7 +339,7 @@ def _unscored(question, transcript, status, summary):
 
 
 def normalize_grounded(payload, questions, transcribed, photo_count, *, protocol=LEGACY_PROTOCOL):
-    from holistic_scoring import normalize, ready, project_score_sum
+    from holistic_scoring import normalize
     readable = [qid for qid, item in transcribed.items() if item['status'] == 'readable']
     scores = by_question(payload, readable)
     outputs = []
@@ -280,11 +359,11 @@ def normalize_grounded(payload, questions, transcribed, photo_count, *, protocol
                     raise ValueError('评分状态与已转写作答不一致')
                 references = protocol == REFERENCE_PROTOCOL
                 repaired_flags = references and _normalize_reference_flags(raw)
-                _ground_evidence(raw, transcript, references=references)
+                repaired_references, repair_reasons = _ground_evidence(raw, transcript, references=references)
+                if repaired_references or repair_reasons:
+                    raw['needs_review'] = True
                 if references:
-                    config = ready(question)
-                    if config.get('aggregation') == 'sum_projects' and 'suggested_total' not in raw:
-                        raw['suggested_total'] = project_score_sum(raw, config, infer_level=True)
+                    repair_reasons = repair_reasons + _complete_reference_fields(raw)
                     incorrect_facts = [
                         fact for fact in raw.get('fact_checks', []) if fact.get('judgment') == 'incorrect'
                     ]
@@ -297,7 +376,8 @@ def normalize_grounded(payload, questions, transcribed, photo_count, *, protocol
                             or (factual_status == 'issues' and not incorrect_facts)):
                         raw['needs_review'] = True
                         raw['factual_judgment_conflict'] = True
-                result = normalize({'sub_questions': [raw]}, [question], photo_count, grounded=True)
+                result = normalize({'sub_questions': [raw]}, [question], photo_count, grounded=True,
+                                   reference_projects=references)
                 item = result['sub_questions'][0]
                 score = item['suggested_total']
                 if raw['problem_flags']['off_topic'] and (score != 0 or any(d.get('score', 0) != 0 for d in raw['dimension_assessments'])):
@@ -309,6 +389,14 @@ def normalize_grounded(payload, questions, transcribed, photo_count, *, protocol
                 item['transcription'] = transcript
                 if repaired_flags:
                     item['block_reasons'].append('模型以列表返回关键问题标记，分数仅供核对')
+                if repaired_references:
+                    item['block_reasons'].append('模型使用转写行号引用了已有证据，分数仅供核对')
+                for reason in repair_reasons:
+                    if reason not in item['block_reasons']:
+                        item['block_reasons'].append(reason)
+                if repair_reasons:
+                    item['blocked'] = True
+                    item['needs_review'] = True
                 if raw.get('factual_judgment_conflict'):
                     item['block_reasons'].append('总体史实判断与逐条证据判断冲突，分数仅供核对')
                 if transcript['review_only']:

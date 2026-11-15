@@ -74,3 +74,10 @@ it('明确空白自动计零不显示待终评',()=>{
  expect(compactReason({...paper,questions:[blank],state:'confirmed',confirmation_method:'automatic_blank_zero'})).toBe('')
  expect(scoreSummary({...paper,state:'confirmed',confirmation_method:'automatic_blank_zero',questions:[blank]})).toContain('自动确认0分')
 })
+
+it('不把开放题缺失或校验失败显示为分档一致',()=>{
+ const invalid={...q,scoring_mode:'holistic',a:null,a_status:'scoring_invalid'}
+ expect(questionDifference(invalid)).toBe('评分校验未通过')
+ expect(questionDifference({...invalid,a_status:'missing'})).toBe('结果不完整')
+ expect(compactReason({...paper,questions:[invalid]})).toBe('17.1评分校验未通过')
+})

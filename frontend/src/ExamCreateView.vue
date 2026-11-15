@@ -2,7 +2,7 @@
 import ProjectRubricEditor from './ProjectRubricEditor.vue'
 import {examHref,type ExamContext} from './navigation'
 import { computed, onUnmounted, ref } from 'vue'
-import {reorder,newSub,moveSub,mergeNext,splitSub,type Major,type Sub, blockers, conflictEvidence, conflictIds, createExam, editDraft, filePayload, parseExam, parseAiExam, previewAiExam, preserveAiExamEdits, references, scoreTotals, sumWarning, type AiPreview, type AiSummary, type Confirmation, type Created, type Draft } from './examImport'
+import {reorder,newSub,moveSub,mergeNext,splitSub,type Major,type Sub, blockers, conflictEvidence, conflictIds, createExam, editDraft, filePayload, parseExam, parseAiExam, previewAiExam, preserveAiExamEdits, references, scoreTotals, sourceRuleHints, sumWarning, type AiPreview, type AiSummary, type Confirmation, type Created, type Draft } from './examImport'
 const emit=defineEmits<{created:[value:ExamContext]}>()
 const docx = ref<File>(), pdf = ref<File>(), draft = ref<Draft>(), edit = ref<Confirmation>()
 const draftId = ref(''), busy = ref(false), error = ref(''), created = ref<Created>(), ambiguous = ref(false)
@@ -109,7 +109,9 @@ onUnmounted(() => { revision++; docx.value=undefined; pdf.value=undefined; draft
             <button type="button" @click="major.sub_questions.splice(qi,1);revised()">删除小题</button><button type="button" @click="structural(()=>splitSub(major,q))">拆分小题</button><button type="button" :disabled="qi===major.sub_questions.length-1" @click="structural(()=>mergeNext(major,qi))">与下一小题合并</button>
             <label>移动到大题<select aria-label="移动到大题" :value="mi" @change="structural(()=>moveSub(major,edit!.material_questions[Number(($event.target as HTMLSelectElement).value)]!,q))"><option v-for="(dest,di) in edit.material_questions" :key="di" :value="di">{{dest.label}}</option></select></label>
             <label>{{ q.question_id }}设问<textarea v-model="q.question" rows="3" required></textarea></label>
-            <label>{{ q.question_id }}参考答案<textarea v-model="q.reference_answer" rows="3" :required="q.scoring_mode!=='holistic'"></textarea></label>
+            <label>{{ q.question_id }}{{q.scoring_mode==='holistic'?'参考范例（可选）':'参考答案'}}<textarea v-model="q.reference_answer" rows="3" :required="q.scoring_mode!=='holistic'"></textarea></label>
+            <p v-if="q.scoring_mode==='holistic'" class="muted">可粘贴多个范例，每例空一行。可给分的要求请填写在下方的评价项目或档次标准中。</p>
+            <ul v-if="sourceRuleHints(q).length" class="muted"><li v-for="hint in sourceRuleHints(q)" :key="hint">{{hint}}</li></ul>
             <details v-if="q.ai_reference_alternative || q.scoring_guide_source"><summary>核对 AI 提取的答案与评分原文</summary><p v-if="q.ai_reference_alternative">AI 提取的参考内容与现有答案不同，请对照核实。</p><pre v-if="q.ai_reference_alternative" style="white-space:pre-wrap">{{q.ai_reference_alternative}}</pre><pre v-if="q.scoring_guide_source" style="white-space:pre-wrap">{{q.scoring_guide_source}}</pre></details>
             <label>{{ q.question_id }}满分<input v-model="q.max_score" type="number" min="0" step="any" required></label>
             <label :for="'exam-scoring-mode-'+q.question_id">{{q.question_id}}评分方式</label><select :id="'exam-scoring-mode-'+q.question_id" v-model="q.scoring_mode" @change="switchMode(q)"><option value="weighted">按评分项分值累计</option><option value="point_bank">按得分点封顶</option><option value="holistic">开放题评价（整体分档／分项给分）</option></select>

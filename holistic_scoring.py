@@ -62,7 +62,7 @@ def _finite(value):
     return type(value) in (int,float) and math.isfinite(value)
 
 
-def check(raw, question, photo_count, *, grounded=False):
+def check(raw, question, photo_count, *, grounded=False, allow_partial_projects=False):
     from grading_core import normalize_evidence_box
     config=ready(question)
     if not isinstance(raw,dict) or raw.get('simulation_model') or raw.get('criteria') not in (None,[]):raise ValueError('分档结果不得冒充模拟或逐点成绩')
@@ -84,7 +84,7 @@ def check(raw, question, photo_count, *, grounded=False):
     if any(raw.get(k) is not True for k in ('image_readable','region_complete','question_matched')):raise ValueError('作答状态与图像或题目核验矛盾')
     level=next((x for x in config['levels'] if x['id']==raw.get('level_id')),None);score=raw.get('suggested_total')
     if config.get('aggregation')=='sum_projects':
-        check_project_scores(raw,config)
+        check_project_scores(raw, config, allow_partial=allow_partial_projects)
     elif not level or not _finite(score) or not level['min_score']<=score<=level['max_score'] or Decimal(str(score))%Decimal(str(config['score_step']))!=0:
         raise ValueError('档次不存在或分数超档、步长无效')
     evidence=raw.get('evidence');ids=set()
@@ -102,6 +102,9 @@ def check(raw, question, photo_count, *, grounded=False):
     def valid_dimension_evidence(d):
         # An absent component (such as a missing conclusion) has nothing to quote.
         if config.get('aggregation') == 'sum_projects' and d.get('score') == 0 and d.get('judgment') == 'not_met' and d.get('evidence_ids') == []:
+            return True
+        if (allow_partial_projects and config.get('aggregation') == 'sum_projects'
+                and d.get('score') is None and d.get('judgment') == 'uncertain' and d.get('evidence_ids') == []):
             return True
         return references(d)
 
@@ -152,7 +155,7 @@ def normalize_grounded_flags(raw):
     return reasons
 
 
-def normalize(payload,questions,photo_count, *, grounded=False):
+def normalize(payload,questions,photo_count, *, grounded=False, reference_projects=False):
     subs=payload.get('sub_questions')
     if not isinstance(subs,list) or len(subs)!=len(questions) or {s.get('sub_question_id') for s in subs}!={q['id'] for q in questions}:raise ValueError('分档输出范围不完整或重复')
     mapped={s['sub_question_id']:s for s in subs};out=[]
@@ -160,9 +163,10 @@ def normalize(payload,questions,photo_count, *, grounded=False):
         raw = copy.deepcopy(mapped[q['id']])
         config = ready(q)
         review_reasons = normalize_grounded_flags(raw) if grounded else []
+        partial_total = None
         if config.get('aggregation') == 'sum_projects':
-            normalize_project_scores(raw, config)
-        check(raw, q, photo_count, grounded=grounded)
+            partial_total = normalize_project_scores(raw, config, reference_protocol=reference_projects)
+        check(raw, q, photo_count, grounded=grounded, allow_partial_projects=reference_projects)
         # Bind to the request's rubric. Provider echoes are not version evidence.
         raw.update(scoring_version=config['scoring_version'], rubric_hash=digest(q))
         state = raw['answer_status']
@@ -172,6 +176,12 @@ def normalize(payload,questions,photo_count, *, grounded=False):
             needs_review=uncertain,block_reasons=['小论文存在未解决判断'] if uncertain else [],summary=raw.get('summary',''),
             holistic_result=raw,holistic_source=copy.deepcopy(q),photo_count=photo_count)
         item['block_reasons'].extend(review_reasons)
+        if partial_total is not None:
+            item['answer_status'] = 'scoring_partial'
+            if any(project.get('score') is not None for project in raw['dimension_assessments']):
+                item['partial_project_total'] = partial_total
+            item['block_reasons'] = ['部分评分项目未给分，需教师核对']
+            item['block_reasons'].extend(review_reasons)
         if 'reported_project_total' in raw:
             item['block_reasons'].append('模型报告的总分与分项合计不一致，已按分项重算，需教师复核')
         if state=='unanswered_candidate':
@@ -260,13 +270,20 @@ def project_prompt(assignment_question,questions,regions,mapping):
     return protocol.replace(PROMPT_VERSION,'analytic-project-grading-v1')+'\n'+json.dumps(dict(assignment_question=assignment_question,questions=templates,answer_regions=regions or [],question_mapping=mapping or []),ensure_ascii=False)
 
 
-def normalize_project_scores(raw, config):
+def normalize_project_scores(raw, config, *, reference_protocol=False):
     if raw.get('answer_status') != 'answered':
         return
 
     if type(raw.get('needs_review')) is not bool:
         raise ValueError('分档评分状态无效')
-    total = project_score_sum(raw, config, infer_level=True)
+    total = project_score_sum(raw, config, infer_level=True, allow_partial=reference_protocol)
+    if reference_protocol and any(item.get('score') is None for item in raw['dimension_assessments']):
+        raw['suggested_total'] = None
+        raw['needs_review'] = True
+        return total
+    if reference_protocol and 'suggested_total' not in raw:
+        raw['suggested_total'] = total
+        return
     reported = raw.get('suggested_total')
     if not _finite(reported) or abs(reported - total) > 1e-9:
         raw['reported_project_total'] = reported
@@ -274,7 +291,7 @@ def normalize_project_scores(raw, config):
         raw['needs_review'] = True
 
 
-def project_score_sum(raw, config, *, infer_level=False):
+def project_score_sum(raw, config, *, infer_level=False, allow_partial=False):
     if raw.get('level_id') is not None:raise ValueError('项目计分不应生成整题档次')
     dims=raw.get('dimension_assessments')
     if not isinstance(dims,list) or len(dims)!=len(config['projects']):raise ValueError('项目评分不完整')
@@ -285,6 +302,9 @@ def project_score_sum(raw, config, *, infer_level=False):
         item = matches[0]
         score = item.get('score')
         level_id = item.get('level_id')
+        if allow_partial and score is None and level_id is None and item.get('judgment') == 'uncertain':
+            item['score'] = None
+            continue
         if not _finite(score) or Decimal(str(score)) % Decimal(str(p['score_step'])) != 0:
             raise ValueError('项目分数与档次或步长不符')
         levels = [level for level in p['levels'] if level['min_score'] <= score <= level['max_score']
@@ -297,7 +317,11 @@ def project_score_sum(raw, config, *, infer_level=False):
     return total
 
 
-def check_project_scores(raw, config):
-    total = project_score_sum(raw, config)
+def check_project_scores(raw, config, *, allow_partial=False):
+    total = project_score_sum(raw, config, allow_partial=allow_partial)
+    if allow_partial and any(item.get('score') is None for item in raw['dimension_assessments']):
+        if raw.get('suggested_total') is not None or raw.get('needs_review') is not True:
+            raise ValueError('项目评分不完整，不能生成总分')
+        return
     if not _finite(raw.get('suggested_total')) or abs(raw['suggested_total'] - total) > 1e-9:
         raise ValueError('项目分数合计与总分不一致')

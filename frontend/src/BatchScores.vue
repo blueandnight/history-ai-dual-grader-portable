@@ -5,7 +5,7 @@ import ReviewQueue from './ReviewQueue.vue'
 import SubmissionDetail from './SubmissionDetail.vue'
 import {fetchDetail,type Detail} from './records'
 const props=defineProps<{assignmentId:string;examId?:string;batchId:string;refreshKey:number;recoveryInline?:boolean}>()
-const emit=defineEmits<{changed:[];recover:[];reviewed:[detail:Detail]}>()
+const emit=defineEmits<{changed:[];recover:[id:string];reviewed:[detail:Detail]}>()
 const reviewId=ref(''),detailId=ref(''),error=ref(''),opening=ref(false),reviewItems=shallowRef<Detail[]>([])
 const expectedExam=computed(()=>props.examId||reviewItems.value.find(d=>d.id===reviewId.value)?.exam_id)
 let revision=0
@@ -30,5 +30,5 @@ function saved(d:Detail){reviewItems.value=reviewItems.value.map(r=>r.id===d.id?
 <p v-if="error" role="alert">{{error}}</p><p v-if="opening" role="status">正在打开本批答卷…</p>
 <ReviewQueue v-if="reviewId" v-model:id="reviewId" :items="reviewItems" :expected-exam-id="expectedExam" back-label="返回本批成绩" @saved="saved"/>
 <template v-else-if="detailId"><button @click="detailId=''">返回本批成绩</button><SubmissionDetail :id="detailId"/></template>
-<ConsensusScores v-else :assignment-id="assignmentId" :exam-id="examId" :batch-id="batchId" auto-refresh :refresh-key="refreshKey" :recovery-inline="recoveryInline" @recover="emit('recover')" @review="open" @detail="id=>open(id,[id],true)" @changed="emit('changed')"/>
+<ConsensusScores v-else :assignment-id="assignmentId" :exam-id="examId" :batch-id="batchId" auto-refresh :refresh-key="refreshKey" :recovery-inline="recoveryInline" @recover="id=>emit('recover',id)" @review="open" @detail="id=>open(id,[id],true)" @changed="emit('changed')"/>
 </section></template>

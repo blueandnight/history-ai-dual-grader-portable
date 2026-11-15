@@ -487,6 +487,33 @@ class OrderedBatchTests(unittest.TestCase):
         finally:
             conn.close()
 
+    def test_unusable_photo_keeps_its_error_and_next_paper_advances(self):
+        conn = app.get_db()
+        conn.execute("INSERT INTO roster_classes (id, class_name, created_at) VALUES (?, ?, ?)",
+                     ("cccccccccccc", "高一一班", app.utc_now()))
+        conn.commit()
+        conn.close()
+        batch = self.make_batch(["甲", "乙"])
+        self.upload_batch(batch)
+        first, second = [item["submission_id"] for item in batch["items"]]
+        invalid = self.mock_result("image-quality-error")
+        invalid["suggested_total"] = None
+        with patch.object(app, "_require_formal_answer_regions"), patch.object(
+            app, "grade_submission", side_effect=[invalid, self.mock_result()]
+        ), patch.object(app, "enqueue_submission", return_value=True) as enqueue:
+            app.process_submission(first)
+            enqueue.assert_called_once_with(second)
+            app.process_submission(second)
+        conn = app.get_db()
+        try:
+            stored = conn.execute("SELECT state, result_json FROM submissions WHERE id = ?", (first,)).fetchone()
+            self.assertEqual(stored["state"], "completed")
+            self.assertEqual(json.loads(stored["result_json"])["mode"], "image-quality-error")
+            record = conn.execute("SELECT status, next_sequence FROM grading_batches WHERE id = ?", (batch["batch_id"],)).fetchone()
+            self.assertEqual(tuple(record), ("completed", 3))
+        finally:
+            conn.close()
+
     def test_model_failure_pauses_batch_and_manual_retry_reuses_same_sequence(self):
         batch = self.make_batch(["甲", "乙"])
         self.upload_batch(batch)
@@ -510,6 +537,110 @@ class OrderedBatchTests(unittest.TestCase):
             app.process_submission(batch["items"][0]["submission_id"])
             app.process_submission(batch["items"][1]["submission_id"])
         self.assertEqual(calls, [1, 1, 2])
+
+    def test_completed_scoring_invalid_record_rescores_without_moving_batch_cursor(self):
+        conn = app.get_db()
+        try:
+            conn.execute(
+                "INSERT INTO roster_classes (id, class_name, created_at) VALUES (?, ?, ?)",
+                ("cccccccccccc", "高一一班", app.utc_now()),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        batch = self.make_batch(["甲"])
+        target = batch["items"][0]["submission_id"]
+        result = {
+            "mode": "vision-model",
+            "suggested_total": None,
+            "max_total": 2,
+            "blocked": True,
+            "needs_review": True,
+            "summary": "模拟评分校验未通过",
+            "sub_questions": [{"sub_question_id": "Q1", "answer_status": "scoring_invalid",
+                               "block_reasons": ["开放题证据编号无效或重复"]}],
+        }
+        conn = app.get_db()
+        try:
+            now = app.utc_now()
+            student_dir = Path(app.DATA_DIR) / "aaaaaaaaaaaa" / "students" / target
+            student_dir.mkdir(parents=True, exist_ok=True)
+            page = student_dir / "page_01.jpg"
+            Image.new("RGB", (1000, 800), "white").save(page, format="JPEG", quality=85)
+            photo_path = f"data/aaaaaaaaaaaa/students/{target}/page_01.jpg"
+            conn.execute(
+                "INSERT INTO submissions (id, assignment_id, student_label, answer_text, photos_json, result_json, "
+                "created_at, batch_id, batch_sequence, state, ai_privacy_confirmed, privacy_status) "
+                "VALUES (?, ?, '', '', ?, ?, ?, ?, 1, 'completed', 1, 'no_identity_visible')",
+                (target, "aaaaaaaaaaaa",
+                 json.dumps([{"path": photo_path, "page_sequence": 1}]),
+                 json.dumps(result, ensure_ascii=False), now, batch["batch_id"]),
+            )
+            conn.execute(
+                "INSERT INTO task_queue (id, submission_id, state, attempt_count, available_at, last_error, created_at, updated_at) "
+                "VALUES (?, ?, 'completed', 0, ?, '', ?, ?)",
+                (app.uuid.uuid4().hex, target, now, now, now),
+            )
+            conn.commit()
+            cursor_before = tuple(
+                conn.execute(
+                    "SELECT status, next_sequence FROM grading_batches WHERE id = ?", (batch["batch_id"],)
+                ).fetchone()
+            )
+        finally:
+            conn.close()
+        self.assertEqual(cursor_before, ("active", 1))
+
+        records = self.get_json("/api/recovery-submissions")["submissions"]
+        record = next(item for item in records if item["id"] == target)
+        self.assertTrue(record["retryable"])
+        self.assertEqual(record["recovery_action"], "rescore_completed_submission")
+
+        with patch.object(app, "enqueue_submission", return_value=True):
+            self.request_json("/api/retry", {"submission_id": target})
+        conn = app.get_db()
+        try:
+            queued = conn.execute(
+                "SELECT state, result_json FROM submissions WHERE id = ?", (target,)
+            ).fetchone()
+            self.assertEqual(queued["state"], "queued")
+            self.assertTrue(json.loads(queued["result_json"]).get("rescore_completed"))
+            self.assertEqual(
+                tuple(
+                    conn.execute(
+                        "SELECT status, next_sequence FROM grading_batches WHERE id = ?", (batch["batch_id"],)
+                    ).fetchone()
+                ),
+                cursor_before,
+                "rescoring a completed record must not move the batch cursor",
+            )
+        finally:
+            conn.close()
+
+        with patch.object(app, "grade_submission", side_effect=lambda *_args: self.mock_result()), patch.object(
+            app, "enqueue_submission", return_value=True
+        ):
+            app.process_submission(target)
+        conn = app.get_db()
+        try:
+            done = conn.execute(
+                "SELECT state, result_json FROM submissions WHERE id = ?", (target,)
+            ).fetchone()
+            queue_error = conn.execute(
+                "SELECT last_error FROM task_queue WHERE submission_id = ?", (target,)
+            ).fetchone()[0]
+            self.assertEqual(done["state"], "completed", queue_error)
+            self.assertNotIn("scoring_invalid", done["result_json"])
+            self.assertEqual(
+                tuple(
+                    conn.execute(
+                        "SELECT status, next_sequence FROM grading_batches WHERE id = ?", (batch["batch_id"],)
+                    ).fetchone()
+                ),
+                cursor_before,
+            )
+        finally:
+            conn.close()
 
     def test_restart_marks_inflight_batch_uncertain_and_never_auto_replays(self):
         batch = self.make_batch(["甲", "乙"])

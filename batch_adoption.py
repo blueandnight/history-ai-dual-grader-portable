@@ -204,17 +204,22 @@ def listing(conn, assignment_id, exam_id, actor, api, batch_id=''):
         models = dual.get('models') if isinstance(dual.get('models'),dict) else {}
         errors = dual.get('errors') if isinstance(dual.get('errors'),dict) else {}
         issues = {s:model_display_issue(models.get(s) if isinstance(models.get(s),dict) else {}, errors.get(s) if isinstance(errors.get(s),dict) else {}) for s in ('A','B')}
-        progress = ('recovery' if result.get('mode') in ('rules-demo','vision-model-error','processing-error') else 'grading' if row['state']=='grading' else 'stopped' if row['state']=='queued' and row['grading_stopped'] else 'paused' if row['state']=='queued' and row['batch_status']=='paused' else 'queued' if row['state']=='queued' else 'recovery' if row['state']=='recovery_pending' else 'failed' if row['state']=='failed' else state)
-        if result.get('mode')=='rules-demo':
+        progress = ('grading' if row['state']=='grading' else 'recovery' if result.get('mode') in ('rules-demo','vision-model-error','processing-error') else 'stopped' if row['state']=='queued' and row['grading_stopped'] else 'paused' if row['state']=='queued' and row['batch_status']=='paused' else 'queued' if row['state']=='queued' else 'recovery' if row['state']=='recovery_pending' else 'failed' if row['state']=='failed' else state)
+        if result.get('mode')=='image-quality-error':
+            issues['A']='照片质量未通过，未调用模型；请核对原卷或使用清晰照片重新上传'
+        elif result.get('mode')=='rules-demo':
             issues['A']='尚未进行真实模型评分'
         elif not dual and result.get('mode') in ('vision-model-error','processing-error'):
             issues['A']='尚未获得有效模型评分'
         progress_reasons = {'grading':'正在等待模型评分返回', 'stopped':'已停止后续批改，尚未开始的答卷不会自动评分', 'paused':'批次已暂停，需先处理前序异常答卷或上传任务', 'queued':'等待前序答卷完成，尚未开始评分', 'recovery':'上次处理结果未能确认，需核对计费后人工恢复', 'failed':'处理失败，请到任务恢复查看，勿重复上传整批'}
         if progress in progress_reasons:
             reason = '本份未进行AI评分，需配置模型并确认原位恢复' if result.get('mode')=='rules-demo' else progress_reasons[progress]
-        scope = result.get('grading_scope') if isinstance(result.get('grading_scope'),dict) else {}
-        expected_ids = set(scope.get('graded_question_ids') or [q['id'] for q in subs])
-        complete = {s:bool(subs) and not issues[s] and {q.get('sub_question_id') for q in results[s].get('sub_questions',[]) if isinstance(q,dict)}==expected_ids and all(q[s.lower()+'_status'] in ('answered','blank_confirmed') and q[s.lower()] is not None for q in subs) for s in ('A','B')}
+        from saved_ai_scores import saved_model_scores
+        projected = saved_model_scores(result)
+        complete = {s: projected.get(s, ({}, None, 'missing'))[2] == 'complete' for s in ('A', 'B')}
+        for question in subs:
+            for side in ('A', 'B'):
+                question[side.lower()] = projected.get(side, ({}, None, 'missing'))[0].get(question['id'])
         evidence_only = False
         if (dual.get('status') == 'complete' and not dual.get('errors')
                 and all(models.get(s, {}).get('status') == 'ok' for s in ('A', 'B'))
@@ -228,7 +233,7 @@ def listing(conn, assignment_id, exam_id, actor, api, batch_id=''):
             except (ValueError, TypeError, KeyError, AttributeError):
                 pass
         names = {s: {'deepseek':'DeepSeek','mimo':'MiMo','qwen':'Qwen'}.get((dual.get('models') or {}).get(s,{}).get('provider'), (dual.get('models') or {}).get(s,{}).get('label') or '模型'+s) for s in ('A','B')}
-        papers.append({'id':row['id'], 'exam_id':row['exam_id'] or '', 'sequence':row['batch_sequence'], 'label':row['marking_code'] or '答卷 '+row['id'][:6], 'state':state, 'progress_state':progress, 'reason':reason, 'model_issues':issues, 'totals_complete':complete, 'a':displayed_number(results['A'].get('suggested_total')), 'b':displayed_number(results['B'].get('suggested_total')), 'names':names, 'max_score':displayed_number(result.get('max_total')), 'questions':subs, 'evidence_only':evidence_only, 'confirmation_method':result.get('confirmation_method'), 'final_total':displayed_number(row['final_total'])})
+        papers.append({'id':row['id'], 'exam_id':row['exam_id'] or '', 'sequence':row['batch_sequence'], 'label':row['marking_code'] or '答卷 '+row['id'][:6], 'state':state, 'progress_state':progress, 'reason':reason, 'model_issues':issues, 'totals_complete':complete, 'a':projected['A'][1], 'b':projected.get('B', ({}, None, 'missing'))[1], 'names':names, 'max_score':displayed_number(result.get('max_total')), 'questions':subs, 'evidence_only':evidence_only, 'can_rescore':row['state']=='completed' and not row['confirmed_at'] and any(q[k]=='scoring_invalid' for q in subs for k in ('a_status','b_status')), 'confirmation_method':result.get('confirmation_method'), 'final_total':displayed_number(row['final_total'])})
     return {'papers':papers, 'preview_token':TOKENS.dumps({'assignment_id':assignment_id, 'exam_id':exam_id, 'batch_id':batch_id, 'actor':actor, 'papers':proofs})}
 
 

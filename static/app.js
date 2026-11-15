@@ -2277,6 +2277,7 @@ function renderEvaluationSummary(data) {
       <div class="evaluation-metric"><span>失败率</span><strong>${evaluationPercent(metrics.failure_rate)}</strong><small>${metrics.failed_cases ?? 0} / ${metrics.matched_cases ?? 0} 个已找到样本</small></div>
     </div>
     <div class="evaluation-breakdown"><span>已匹配 ${metrics.matched_cases ?? 0}</span><span>已评分 ${metrics.scored_cases ?? 0}</span><span>缺失 ${metrics.missing_cases ?? 0}</span><span>未纳入统计 ${metrics.excluded_cases ?? 0}</span></div>
+    ${Array.isArray(data.by_model) && data.by_model.length ? `<table><thead><tr><th>模型与版本</th><th>完整 / 部分 / 缺失</th><th>平均绝对误差</th><th>严重误差</th><th>教师给分而模型给零</th><th>答卷标记待复核</th></tr></thead><tbody>${data.by_model.map(row => `<tr><td>${escapeHtml([row.side, row.model || row.provider || '历史模型', row.prompt_version, row.grading_rules_version, row.app_version].filter(Boolean).join(' · '))}</td><td>${row.complete} / ${row.partial} / ${row.missing}</td><td>${evaluationNumber(row.average_absolute_error)}</td><td>${row.severe_errors}</td><td>${row.zero_with_positive_gold}</td><td>${row.needs_review}</td></tr>`).join('')}</tbody></table>` : ''}
     <details class="evaluation-versions"><summary>查看本批样本的版本信息</summary><p>${contextText}</p></details>`;
 }
 
@@ -2958,6 +2959,7 @@ function renderResult(submission, elapsedMs = null, { readOnly = false } = {}) {
       ? '照片质量不合格，未调用模型，请重新拍摄。'
       : '当前处理未通过安全门禁，请重新准备答卷。';
   const displayScoresBlocked = hardBlocked || (Boolean(result.blocked) && !reviewOverride);
+  const primarySuggestion = submission.model_scores?.[result.dual_review?.base_side || 'A'];
   const scoreText = teacherReconfirmation
     ? '待教师重新确认'
     : unresolvedAnswerReview
@@ -2965,7 +2967,7 @@ function renderResult(submission, elapsedMs = null, { readOnly = false } = {}) {
     : result.simulation_model
     ? '仅流程模拟'
     : canConfirm || canReview
-    ? escapeHtml(result.suggested_total)
+    ? (primarySuggestion?.state === 'partial' ? `部分 ${escapeHtml(primarySuggestion.score)}` : escapeHtml((primarySuggestion ? primarySuggestion.score : result.suggested_total) ?? '—'))
     : (canRetry ? '待重试' : '无法判分');
   const scoreLabel = teacherReconfirmation
     ? '本次评分范围终分'
@@ -3078,9 +3080,11 @@ function renderResult(submission, elapsedMs = null, { readOnly = false } = {}) {
       const modelResult = results[side] || {};
       const usage = meta.token_usage || {};
       const scopedMaximum = Number(result.grading_scope?.scoped_max_score ?? result.max_total);
-      const modelTotal = Number(modelResult.suggested_total);
-      const scopedModelTotal = Number.isFinite(modelTotal) && modelTotal >= 0 && modelTotal <= scopedMaximum ? modelTotal : '—';
-      return `<div class="dual-model-summary"><strong>AI-${side} · ${escapeHtml(modelNames[side])}</strong><span>${meta.status === 'error' ? `调用失败（${escapeHtml(meta.error_category || 'unknown')}）` : `建议 ${escapeHtml(scopedModelTotal)} / ${escapeHtml(scopedMaximum)}`}</span><details><summary>技术详情</summary><small>${escapeHtml(meta.model_id || '')} · ${escapeHtml(meta.latency_ms ?? '—')} ms · ${escapeHtml(usage.total_tokens ?? '—')} tokens</small></details></div>`;
+      const projected = submission.model_scores?.[side];
+      const value = projected ? projected.score : modelResult.suggested_total;
+      const scopedModelTotal = typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= scopedMaximum ? value : '—';
+      const suggestion = projected?.state === 'partial' ? `部分小题合计 ${escapeHtml(scopedModelTotal)} 分` : `建议 ${escapeHtml(scopedModelTotal)} / ${escapeHtml(scopedMaximum)}`;
+      return `<div class="dual-model-summary"><strong>AI-${side} · ${escapeHtml(modelNames[side])}</strong><span>${meta.status === 'error' ? `调用失败（${escapeHtml(meta.error_category || 'unknown')}）` : suggestion}</span><details><summary>技术详情</summary><small>${escapeHtml(meta.model_id || '')} · ${escapeHtml(meta.latency_ms ?? '—')} ms · ${escapeHtml(usage.total_tokens ?? '—')} tokens</small></details></div>`;
     };
     const rows = Array.isArray(comparison.point_comparisons) ? comparison.point_comparisons : [];
     return `<section class="dual-review-panel" aria-label="双模型对照结果">

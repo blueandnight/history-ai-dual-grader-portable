@@ -65,6 +65,8 @@ def submission_public(row: sqlite3.Row, *, get_db) -> dict[str, Any]:
             teacher_questions = [q for q in questions if not ids or q['id'] in ids]
         finally:
             conn.close()
+    from saved_ai_scores import saved_model_scores
+    model_scores = saved_model_scores(result)
     photos = json.loads(row["photos_json"] or "[]")
     anonymous = bool(row["marking_code_id"]) if "marking_code_id" in row.keys() else False
     if anonymous:
@@ -88,6 +90,7 @@ def submission_public(row: sqlite3.Row, *, get_db) -> dict[str, Any]:
         "identity_method": "marking_code" if anonymous else row["identity_method"],
         "photos": photos,
         "result": result,
+        "model_scores": {side: {"score": value, "state": state} for side, (_, value, state) in model_scores.items()},
         "teacher_scoring_questions": teacher_questions,
         "privacy_status": row["privacy_status"] if "privacy_status" in row.keys() else "legacy_unknown",
         "final_total": row["final_total"],
@@ -105,6 +108,8 @@ def submission_public(row: sqlite3.Row, *, get_db) -> dict[str, Any]:
 def submission_list_public(row: sqlite3.Row) -> dict[str, Any]:
     """Return only the local history fields needed for photo-cache cleanup."""
     result = json.loads(row["result_json"] or "{}")
+    from saved_ai_scores import primary_model_score
+    _, model_score, model_state = primary_model_score(result)
     photos = json.loads(row["photos_json"] or "[]")
     anonymous = bool(row["marking_code_id"]) if "marking_code_id" in row.keys() else False
     if anonymous:
@@ -125,7 +130,8 @@ def submission_list_public(row: sqlite3.Row) -> dict[str, Any]:
         "final_total": row["final_total"],
         "confirmed_at": row["confirmed_at"],
         "confirmation_method": result.get('confirmation_method'),
-        "suggested_total": result.get("suggested_total"),
+        "suggested_total": model_score,
+        "ai_reference_state": model_state,
         "max_total": result.get("max_total"),
         "grading_scope": result.get("grading_scope"),
         "teacher_reconfirmation_required": bool(result.get("teacher_reconfirmation_required")),

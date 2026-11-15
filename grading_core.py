@@ -351,7 +351,6 @@ def normalize_model_result(
         if raw_score < 0 or raw_score > maximum:
             block_reasons.add("模型返回的评分超出评分点范围")
         bounded_score = max(0.0, min(maximum, raw_score))
-        remaining = max(0.0, max_total - total)
         decision_valid = decision_text in {"full", "partial", "none", "uncertain"}
         if not decision_valid:
             block_reasons.add("模型返回的评分判定类型无效")
@@ -361,18 +360,18 @@ def normalize_model_result(
             if not source_reason:
                 source_reason = "当前答题区域无法明确支持该评分点，等待教师核对。"
         elif scoring_mode == "point_bank":
-            # In a capped point bank, decision describes whether the whole
-            # answer point was present; suggested_score may be only the final
-            # remaining fraction (or zero after the cap was already reached).
+            # In a capped point bank, a full answer earns the whole point value.
+            # A model-declared partial answer earns half of it so a partially
+            # correct correction is not silently discarded as zero; the
+            # remaining-score cap still applies afterwards.
             if decision_text == "full":
                 claimed_score = maximum
-            elif decision_text == "partial" and 0 < remaining < maximum and bounded_score == remaining:
-                claimed_score = maximum
+            elif decision_text == "partial":
+                claimed_score = maximum / 2
+                block_reasons.add("按点题部分正确，已按该点一半计分，请核对")
             else:
                 claimed_score = 0.0
-                if decision_text == "partial":
-                    block_reasons.add("按点计分结果只能在满分封顶时计入剩余分值")
-                elif decision_text == "none" and bounded_score != 0:
+                if decision_text == "none" and bounded_score != 0:
                     block_reasons.add("模型的判定类型与评分数值冲突")
         else:
             claimed_score = bounded_score

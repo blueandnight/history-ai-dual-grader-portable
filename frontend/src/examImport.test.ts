@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
-import { blockers, conflictEvidence, conflictIds, createExam, editDraft, filePayload, preserveAiExamEdits, references, scoreTotals, sumWarning, type Draft } from './examImport'
+import { blockers, conflictEvidence, conflictIds, createExam, editDraft, filePayload, preserveAiExamEdits, references, scoreTotals, sourceRuleHints, sumWarning, type Draft } from './examImport'
 import { setSession } from './api'
 const draft = (): Draft => ({ title:'合成考试',objective_questions:[{question_id:'1',stem:'合成题',options:{A:'甲',B:'乙',C:'丙',D:'丁'}}],objective_answer_key:{'1':'A'},objective_points:{'1':3},material_questions:[{label:'9',prompt:'合成材料',sub_questions:[{question_id:'9.1',question:'设问',reference_answer:'参考',max_score:4,rubric_draft:[{label:'甲',score:1},{label:'乙',score:3}]}]}],source:{source_pair_status:'not_applicable'} })
 afterEach(() => { vi.unstubAllGlobals(); setSession(null) })
@@ -128,4 +128,14 @@ it('requires explicit objective scores and keeps paper totals separate',()=>{
  for(const bad of ['',0,-1,Infinity,101]){c.objective_points['1']=bad;expect(blockers(d,c).join()).toContain('分值')}
  c.objective_points['1']=2.5;expect(preserveAiExamEdits(d,d,c).objective_points['1']).toBe(2.5)
  d.objective_questions[0]!.question_id='3';expect(blockers(d,c).join()).toContain('连续编号')
+})
+
+it('提示任选和封顶时保留原有答案与评分方式',()=>{
+ const q=draft().material_questions[0].sub_questions[0]
+ q.question='任选两处纠正'
+ q.scoring_guide_source='每处2分，最多4分'
+ const before=structuredClone(q)
+ expect(sourceRuleHints(q)).toHaveLength(2)
+ expect(q).toEqual(before)
+ expect(sourceRuleHints(draft().material_questions[0].sub_questions[0])).toEqual([])
 })

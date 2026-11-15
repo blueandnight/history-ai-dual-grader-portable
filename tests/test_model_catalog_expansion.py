@@ -44,6 +44,7 @@ class ModelCatalogExpansionTests(unittest.TestCase):
         expected = {
             ("deepseek", "deepseek-flash"): {"thinking": {"type": "disabled"}},
             ("mimo", "mimo-v2.6-flash"): {"thinking": {"type": "disabled"}},
+            ("mimo", "mimo-v2.6-pro"): {"thinking": {"type": "disabled"}},
             ("qwen", "qwen3.8-max"): {"reasoning_effort": "low"},
             ("qwen", "qwen3.5-flash"): {},
             ("openai", "gpt-4.1"): {},
@@ -100,6 +101,7 @@ class ModelCatalogExpansionTests(unittest.TestCase):
                         self.assertEqual(request.call_args.args[0].full_url, "https://api.xiaomimimo.com/v1/chat/completions")
                         self.assertIn("max_completion_tokens", payload)
                         self.assertNotIn("max_tokens", payload)
+                        self.assertEqual(payload["thinking"], {"type": "disabled"})
                     elif preset["provider"] == "openai":
                         self.assertIn("max_completion_tokens", payload)
                         self.assertNotIn("max_tokens", payload)

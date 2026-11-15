@@ -104,6 +104,18 @@ export function blockers(d: Draft, c: Confirmation): string[] {
   if (!c.teacher_confirmed) errors.push('请完成教师核对确认。')
   return errors
 }
+export function sourceRuleHints(q: Sub): string[] {
+  const source = [q.question, q.scoring_guide_source, q.reference_answer].filter(Boolean).join('\n')
+  const hints: string[] = []
+  if (/任选|任答|任写|任举|任意选|或者|二选一|两者选一/.test(source)) {
+    hints.push('原文可能允许任选内容或作答形式，请核对评分时是否接受各选项。')
+  }
+  if (/每[点项处条]|答对.{0,8}(?:即得|得满|给满)|不超过.{0,8}分|最多.{0,8}分|封顶/.test(source)) {
+    hints.push('原文可能有按项计分或封顶要求，请核对每项分值、满分及评分方式。')
+  }
+  return hints
+}
+
 export function sumWarning(q: Sub) {
   if(q.scoring_mode==='holistic')return '按教师确认的档次和步长整体评分；评价维度不累计计分。'
   const sum = q.rubric_draft.reduce((a,p) => a + Number(p.score), 0)

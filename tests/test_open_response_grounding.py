@@ -231,3 +231,93 @@ class GroundingTests(unittest.TestCase):
             with self.subTest(flags=flags, off_topic=off_topic):
                 item.update(problem_flags=flags, off_topic=off_topic)
                 self.assertEqual(grade()['answer_status'], 'scoring_invalid')
+
+    def test_reference_line_alias_requires_one_existing_evidence(self):
+        item = copy.deepcopy(self.item)
+        evidence = item['evidence'][0]
+        item['fact_checks'] = [dict(judgment='correct', reason='按原文核对', evidence_ids=['L1'])]
+        item['dimension_assessments'][0]['evidence_ids'] = ['L1']
+
+        def grade():
+            return normalize_grounded({'sub_questions': [item]}, [self.question], self.transcript(), 1,
+                                      protocol=REFERENCE_PROTOCOL)['sub_questions'][0]
+
+        result = grade()
+        self.assertEqual(result['suggested_total'], 0)
+        self.assertTrue(result['blocked'])
+        self.assertEqual(result['holistic_result']['fact_checks'][0]['evidence_ids'], [evidence['id']])
+        self.assertEqual(result['holistic_result']['dimension_assessments'][0]['evidence_ids'], [evidence['id']])
+        item['evidence'].append({**evidence, 'id': 'E2'})
+        self.assertEqual(grade()['answer_status'], 'scoring_invalid')
+
+    def test_unscored_project_preserves_only_partial_review_subtotal(self):
+        item = copy.deepcopy(self.item)
+        item['problem_flags']['off_topic'] = False
+        item['dimension_assessments'][0].update(score=1, judgment='met')
+        missing = item['dimension_assessments'][-1]
+        missing.update(score=None, level_id=None, judgment='uncertain', evidence_ids=[])
+        item['suggested_total'] = 12
+
+        def grade(protocol=REFERENCE_PROTOCOL):
+            return normalize_grounded({'sub_questions': [item]}, [self.question], self.transcript(), 1,
+                                      protocol=protocol)['sub_questions'][0]
+
+        result = grade()
+        self.assertEqual(result['answer_status'], 'scoring_partial')
+        self.assertEqual(result['partial_project_total'], 1)
+        self.assertIsNone(result['suggested_total'])
+        self.assertIsNone(result['holistic_result']['dimension_assessments'][-1]['score'])
+        self.assertTrue(result['blocked'])
+        self.assertFalse(hs.valid_sub(result, self.question))
+        self.assertEqual(grade(LEGACY_PROTOCOL)['answer_status'], 'scoring_invalid')
+        item['problem_flags']['off_topic'] = True
+        self.assertEqual(grade()['answer_status'], 'scoring_invalid')
+        item['problem_flags']['off_topic'] = False
+        missing['judgment'] = 'met'
+        self.assertEqual(grade()['answer_status'], 'scoring_invalid')
+
+    def test_reference_missing_judgement_fields_become_review_only(self):
+        item = copy.deepcopy(self.item)
+        item.pop('suggested_total')
+        for dimension in item['dimension_assessments']:
+            dimension.pop('level_id')
+        item['problem_flags'].pop('factual_error')
+        item['problem_flags'].pop('task_constraint_violation')
+        item.pop('critical_factual_issues', None)
+        item.pop('factual_status', None)
+        item.pop('constraint_status', None)
+        item.pop('constraint_reason', None)
+        item['problem_flags']['off_topic'] = False
+        item['dimension_assessments'][0].update(score=1, judgment='met')
+        item['evidence'][0].pop('student_quote')
+        item['evidence'][0].update(start=0, end=4)
+        item['fact_checks'] = [dict(judgment='correct', reason='按原文核对',
+                                   evidence_ids=[item['evidence'][0]['id']])]
+        result = normalize_grounded({'sub_questions': [item]}, [self.question], self.transcript(), 1,
+                                    protocol=REFERENCE_PROTOCOL)['sub_questions'][0]
+        self.assertEqual(result['answer_status'], 'answered')
+        self.assertEqual(result['suggested_total'], 1)
+        self.assertTrue(result['blocked'])
+        self.assertFalse(hs.valid_sub(result, self.question))
+        reasons = ' '.join(result['block_reasons'])
+        self.assertIn('史实核对结论', reasons)
+        self.assertIn('设问限制核对结论', reasons)
+        self.assertEqual(set(result['holistic_result']['problem_flags']), set(hs.PROBLEMS))
+
+    def test_duplicate_evidence_ids_are_renumbered_for_review(self):
+        transcript = self.transcript()
+        lines = transcript[self.question['id']]['lines']
+        lines.append(dict(id='L2', text='地方治理逐步完善。',
+                          location=copy.deepcopy(lines[0]['location'])))
+        item = copy.deepcopy(self.item)
+        item['problem_flags']['off_topic'] = False
+        duplicate_id = item['evidence'][0]['id']
+        item['evidence'].append(dict(id=duplicate_id, line_id='L2', student_quote='地方治理逐步完善'))
+        item['fact_checks'] = []
+        result = normalize_grounded({'sub_questions': [item]}, [self.question], transcript, 1,
+                                    protocol=REFERENCE_PROTOCOL)['sub_questions'][0]
+        self.assertEqual(result['answer_status'], 'answered')
+        self.assertTrue(result['blocked'])
+        evidence_ids = [entry['id'] for entry in result['holistic_result']['evidence']]
+        self.assertEqual(len(evidence_ids), len(set(evidence_ids)))
+        self.assertIn('重新编号', ' '.join(result['block_reasons']))

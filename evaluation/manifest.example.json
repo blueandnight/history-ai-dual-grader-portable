@@ -1,0 +1,13 @@
+{
+  "format": "history-grader-evaluation-v1",
+  "name": "匿名真实答卷评测集",
+  "severe_error_threshold": 2.0,
+  "cases": [
+    {
+      "case_id": "sample-001",
+      "submission_id": "0123456789ab",
+      "gold_total": 0,
+      "max_total": 1
+    }
+  ]
+}

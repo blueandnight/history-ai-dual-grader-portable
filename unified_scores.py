@@ -113,6 +113,8 @@ def subjective_version(result, exam, source_questions, ids):
 
 def valid_ai_subscores(result, exam, source_questions, ids):
     """Shared read-only eligibility for AI references and diagnostic samples."""
+    from saved_ai_scores import usable_question_score
+
     scores = {'A': {}, 'B': {}}
     if not isinstance(ids, list) or not ids or result.get('simulation_model'):
         return scores
@@ -151,11 +153,9 @@ def valid_ai_subscores(result, exam, source_questions, ids):
         counts = Counter(_question_key(q.get('sub_question_id') or q.get('question_id')) for q in questions)
         for q in questions:
             qid = _question_key(q.get('sub_question_id') or q.get('question_id'))
-            value = number(q.get('suggested_total'))
-            if (qid not in wanted or counts[qid] != 1 or value is None or not 0 <= value <= maxima[qid]
-                    or not equal(number(q.get('max_total')), maxima[qid]) or q.get('blocked') or q.get('block_reasons')
-                    or any(q.get(k) is False for k in ('image_readable', 'region_complete', 'question_matched'))
-                    or q.get('answer_status') not in ('answered', 'blank_confirmed')):
+            value = usable_question_score(q)
+            if (qid not in wanted or counts[qid] != 1 or value is None
+                    or not equal(number(q.get('max_total')), maxima[qid])):
                 continue
             if q.get('scoring_mode')=='holistic' and q['answer_status']=='answered':
                 from holistic_scoring import valid_sub

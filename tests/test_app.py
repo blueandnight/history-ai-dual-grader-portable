@@ -80,6 +80,10 @@ class HistoryGraderTests(unittest.TestCase):
             {"thinking": {"type": "disabled"}},
         )
         self.assertEqual(
+            app.deepseek_json_payload_options("mimo", "mimo-v2.6-pro"),
+            {"thinking": {"type": "disabled"}},
+        )
+        self.assertEqual(
             app.deepseek_json_payload_options("qwen", "qwen3.8-max"),
             {"reasoning_effort": "low"},
         )
@@ -732,9 +736,31 @@ class HistoryGraderTests(unittest.TestCase):
         items = result["sub_questions"][0]["criteria"]
         self.assertEqual(result["suggested_total"], 5)
         self.assertEqual([item["suggested_score"] for item in items], [2, 2, 1, 0, 0])
-        self.assertEqual([item["claimed_score"] for item in items], [2] * 5)
-        self.assertEqual([item["credit_status"] for item in items], ["credited", "credited", "capped", "capped", "capped"])
+        self.assertEqual([item["claimed_score"] for item in items], [2, 2, 1, 2, 2])
+        self.assertEqual([item["credit_status"] for item in items], ["credited", "credited", "credited", "capped", "capped"])
         self.assertEqual(items[2]["max_score"], 2)
+
+    def test_point_bank_partial_decision_earns_half_point(self):
+        sub_questions = app.clean_sub_questions([{
+            "id": "Q1", "label": "（1）", "scoring_mode": "point_bank", "point_value": 2, "max_score": 4,
+            "criteria": [{"id": "C1", "label": "要点1", "score": 2}, {"id": "C2", "label": "要点2", "score": 2}],
+        }])
+        result = app.normalize_sub_question_result({"sub_questions": [{
+            "sub_question_id": "Q1",
+            "criteria": [
+                {"criterion_id": "C1", "decision": "partial", "suggested_score": 0,
+                 "student_evidence": "只改对一半", "evidence": {"photo_index": 1, "x": .1, "y": .1, "width": .2, "height": .2}},
+                {"criterion_id": "C2", "decision": "partial", "suggested_score": 1,
+                 "student_evidence": "表述不完整", "evidence": {"photo_index": 1, "x": .3, "y": .1, "width": .2, "height": .2}},
+            ],
+        }]}, sub_questions)
+        items = result["sub_questions"][0]["criteria"]
+        self.assertEqual(result["suggested_total"], 2)
+        self.assertEqual([item["claimed_score"] for item in items], [1.0, 1.0])
+        self.assertEqual([item["suggested_score"] for item in items], [1.0, 1.0])
+        self.assertEqual([item["decision"] for item in items], ["partial", "partial"])
+        self.assertIn("一半", " ".join(result["block_reasons"]))
+        self.assertTrue(result["blocked"])
 
     def test_duplicate_point_evidence_is_not_counted_twice(self):
         sub_questions = app.clean_sub_questions([{
@@ -927,6 +953,31 @@ class HistoryGraderTests(unittest.TestCase):
         self.assertFalse(no_photo_allowed)
         self.assertIn("重新提交照片", no_photo_reason)
 
+    def test_completed_scoring_invalid_record_is_rescorable(self):
+        result = {
+            "mode": "vision-model",
+            "sub_questions": [{"sub_question_id": "Q20.2", "answer_status": "scoring_invalid"}],
+        }
+        self.assertEqual(app.result_scoring_invalid_questions(result), ["Q20.2"])
+        allowed, reason = app.manual_retry_policy(result, "completed")
+        self.assertTrue(allowed)
+        self.assertIn("评分校验未通过", reason)
+        dual = {
+            "mode": "vision-model",
+            "sub_questions": [{"sub_question_id": "Q20.1", "answer_status": "answered"}],
+            "dual_review": {"results": {"B": {"sub_questions": [
+                {"sub_question_id": "Q20.2", "answer_status": "scoring_invalid"},
+            ]}}},
+        }
+        self.assertEqual(app.result_scoring_invalid_questions(dual), ["Q20.2"])
+        self.assertTrue(app.manual_retry_policy(dual, "completed")[0])
+        clean = {
+            "mode": "vision-model",
+            "sub_questions": [{"sub_question_id": "Q20.2", "answer_status": "answered"}],
+        }
+        self.assertEqual(app.result_scoring_invalid_questions(clean), [])
+        self.assertFalse(app.manual_retry_policy(clean, "completed")[0])
+
     def test_manual_retry_backoff_is_bounded_and_increases(self):
         self.assertEqual(app.manual_retry_backoff_seconds(0, "not-a-timestamp"), 0)
         with patch.object(app.time, "time", return_value=100.0):
@@ -1057,6 +1108,22 @@ class HistoryGraderTests(unittest.TestCase):
                 self.assertEqual(summary["metrics"]["severe_error_rate"], 0.0)
                 self.assertEqual(summary["metrics"]["failure_rate"], 0.0)
                 self.assertTrue(summary["audit"]["chain_valid"])
+                self.assertEqual(summary["by_model"][0]["complete"], 1)
+
+                result["suggested_total"] = 0
+                result["sub_questions"] = [{"sub_question_id": "Q1", "max_total": 4,
+                                            "suggested_total": 0, "answer_status": "image_unreadable"}]
+                conn = app.get_db()
+                try:
+                    conn.execute("UPDATE submissions SET result_json=? WHERE id=?",
+                                 (json.dumps(result), "bbbbbbbbbbbb"))
+                    conn.commit()
+                finally:
+                    conn.close()
+                summary = app.evaluation_summary()
+                self.assertEqual(summary["metrics"]["scored_cases"], 0)
+                self.assertEqual(summary["by_model"][0]["missing"], 1)
+                self.assertEqual(summary["by_model"][0]["zero_with_positive_gold"], 0)
             finally:
                 app._install_paths(old_paths)
 

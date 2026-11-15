@@ -65,6 +65,7 @@ import grading_core
 import storage
 import model_gateway
 import server_dual_config
+import image_orientation
 import exam_report
 import support_bundle
 from frontend_routes import serve_preview
@@ -431,7 +432,7 @@ MODEL_PRESETS = {
         "provider_label": "小米 MiMo",
         "base_url": "https://api.xiaomimimo.com/v1",
         "model": "mimo-v2.6-pro",
-        "note": "小米 MiMo 官方视觉模型，可用于与 Flash 对照试阅。",
+        "note": "小米 MiMo 官方视觉模型；批改请求会关闭思考模式，避免思考内容占满输出预算，可与 Flash 对照试阅。",
         "experimental": False,
     },
     "qwen35-flash": {
@@ -798,7 +799,10 @@ def deepseek_json_payload_options(provider: str | None = None, model: str | None
         "deepseek-v4-flash-vision-exp",
     }:
         return {"thinking": {"type": "disabled"}}
-    if provider == "mimo" and model == "mimo-v2.6-flash":
+    # MiMo V2.6 系列默认开启思考：思考内容会先耗尽 max_completion_tokens，
+    # 导致 finish_reason=length 且 content 为空，批改只能记为模型失败。
+    # 所有 MiMo V2.6 批改请求都显式关闭思考，与 Flash 保持一致。
+    if provider == "mimo" and model in {"mimo-v2.6-flash", "mimo-v2.6-pro"}:
         return {"thinking": {"type": "disabled"}}
     if provider == "qwen" and model == "qwen3.8-max":
         return {"reasoning_effort": "low"}
@@ -2998,7 +3002,10 @@ def evaluation_summary() -> dict[str, Any]:
         "average_absolute_error": None,
         "severe_error_threshold": manifest["severe_error_threshold"],
     }
+    from saved_ai_scores import primary_model_score, saved_model_scores
+
     absolute_errors: list[float] = []
+    by_model: dict[tuple, dict[str, Any]] = {}
     modes: dict[str, int] = {}
     version_contexts: list[dict[str, Any]] = []
     conn = get_db()
@@ -3020,11 +3027,39 @@ def evaluation_summary() -> dict[str, Any]:
             context = result.get("grading_context")
             if isinstance(context, dict) and context not in version_contexts:
                 version_contexts.append(context)
-            predicted = _finite_number(result.get("suggested_total"))
+            projected = saved_model_scores(result)
+            dual = result.get("dual_review") or {}
+            wanted_max = case.get("max_total")
+            actual_max = _finite_number((result.get("grading_scope") or {}).get("scoped_max_score", result.get("max_total")))
+            maximum_matches = wanted_max is None or actual_max is not None and abs(actual_max - wanted_max) < 1e-8
+            if row["state"] == "completed":
+                for side, (_, value, state) in projected.items():
+                    metadata = (dual.get("models") or {}).get(side) or {}
+                    context = result.get("grading_context") or {}
+                    model_version = (
+                        side, metadata.get("provider"), metadata.get("model_id"),
+                        metadata.get("prompt_version") or dual.get("prompt_version") or context.get("prompt_version"),
+                        context.get("grading_rules_version"), context.get("app_version"),
+                    )
+                    entry = by_model.setdefault(model_version, {
+                        **dict(zip(("side", "provider", "model", "prompt_version", "grading_rules_version", "app_version"), model_version)),
+                        "samples": 0, "complete": 0, "partial": 0, "missing": 0,
+                        "needs_review": 0, "zero_with_positive_gold": 0, "_errors": [],
+                    })
+                    entry["samples"] += 1
+                    state = state if maximum_matches else "missing"
+                    entry[state] += 1
+                    if result.get("needs_review") or result.get("blocked"):
+                        entry["needs_review"] += 1
+                    if state == "complete" and value is not None:
+                        entry["_errors"].append(abs(value - case["gold_total"]))
+                        if value == 0 and case["gold_total"] > 0:
+                            entry["zero_with_positive_gold"] += 1
+            _, predicted, prediction_state = primary_model_score(result, projected)
             if row["state"] != "completed" or mode in {"queued", "vision-model-error", "image-quality-error", "processing-error"}:
                 metrics["failed_cases"] += 1
                 continue
-            if predicted is None:
+            if predicted is None or prediction_state != "complete" or not maximum_matches:
                 metrics["excluded_cases"] += 1
                 continue
             metrics["scored_cases"] += 1
@@ -3043,8 +3078,13 @@ def evaluation_summary() -> dict[str, Any]:
         metrics["severe_error_rate"] = round(metrics["severe_error_count"] / scored, 4)
         metrics["average_absolute_error"] = round(sum(absolute_errors) / scored, 4)
     metrics["failure_rate"] = round(metrics["failed_cases"] / matched, 4) if matched else None
+    for entry in by_model.values():
+        errors = entry.pop("_errors")
+        entry["average_absolute_error"] = round(sum(errors) / len(errors), 4) if errors else None
+        entry["severe_errors"] = sum(error >= manifest["severe_error_threshold"] for error in errors)
     return {
         "ok": True,
+        "by_model": list(by_model.values()),
         "manifest": {
             "configured": bool(manifest["configured"]),
             "format": manifest["format"],
@@ -3307,8 +3347,13 @@ def process_submission(submission_id: str) -> None:
             if row["state"] not in {"queued", "recovery_pending"}:
                 conn.rollback()
                 return
+            try:
+                queued_bootstrap = json.loads(row["result_json"] or "{}")
+            except (TypeError, ValueError):
+                queued_bootstrap = {}
+            rescore = isinstance(queued_bootstrap, dict) and queued_bootstrap.get("rescore_completed") is True
             batch_id = str(row["batch_id"] or "")
-            if batch_id and not _batch_sequence_is_runnable(conn, batch_id, int(row["batch_sequence"] or 0)):
+            if batch_id and not rescore and not _batch_sequence_is_runnable(conn, batch_id, int(row["batch_sequence"] or 0)):
                 conn.rollback()
                 return
             claimed = conn.execute(
@@ -3553,7 +3598,7 @@ def process_submission(submission_id: str) -> None:
                 },
             )
             next_batch_submission_id = None
-            if batch_id:
+            if batch_id and not rescore:
                 sequence = int(row["batch_sequence"] or 0)
                 # A mixed request may report fragments outside its own scoring
                 # scope even when all expected questions have been identified.
@@ -3564,7 +3609,7 @@ def process_submission(submission_id: str) -> None:
                         item.get("answer_status") == "question_unmatched" for item in questions
                     )
                 batch_failed = result.get("mode") in {
-                    "vision-model-error", "image-quality-error", "processing-error", "rules-demo"
+                    "vision-model-error", "processing-error", "rules-demo"
                 } or needs_mapping
                 if batch_failed:
                     pause_reason = (
@@ -3619,6 +3664,7 @@ def process_submission(submission_id: str) -> None:
                                 "mode": "processing-error",
                                 "blocked": True,
                                 "needs_review": True,
+                                "rescore_completed": rescore,
                                 "diagnostics": processing_diagnostics,
                                 "grading_context": processing_context,
                                 "summary": "任务处理失败，请查看诊断信息后重试。",
@@ -3643,7 +3689,7 @@ def process_submission(submission_id: str) -> None:
                 failed_row = conn.execute(
                     "SELECT batch_id, batch_sequence FROM submissions WHERE id = ?", (submission_id,)
                 ).fetchone()
-                if failed_row and failed_row["batch_id"]:
+                if failed_row and failed_row["batch_id"] and not rescore:
                     conn.execute(
                         "UPDATE grading_batches SET status = 'paused', pause_sequence = ?, pause_reason = ?, updated_at = ? WHERE id = ? AND next_sequence = ?",
                         (
@@ -3683,14 +3729,19 @@ def _enqueue_submission_id(submission_id: str) -> bool:
     conn = get_db()
     try:
         row = conn.execute(
-            "SELECT submissions.batch_id, submissions.batch_sequence, submissions.state "
+            "SELECT submissions.batch_id, submissions.batch_sequence, submissions.state, submissions.result_json "
             "FROM submissions JOIN task_queue ON task_queue.submission_id=submissions.id "
             "WHERE submissions.id = ? AND task_queue.state='queued'",
             (normalized,),
         ).fetchone()
         if not row or row["state"] != "queued":
             return False
-        if row["batch_id"] and not _batch_sequence_is_runnable(
+        try:
+            queued_result = json.loads(row["result_json"] or "{}")
+        except (TypeError, ValueError):
+            queued_result = {}
+        rescore = isinstance(queued_result, dict) and queued_result.get("rescore_completed") is True
+        if row["batch_id"] and not rescore and not _batch_sequence_is_runnable(
             conn, str(row["batch_id"]), int(row["batch_sequence"] or 0)
         ):
             return False
@@ -4872,6 +4923,18 @@ def normalize_photo_corners(raw: Any) -> list[tuple[float, float]] | None:
     return corners
 
 
+def auto_orientation_enabled() -> bool:
+    value = os.getenv("HISTORY_GRADER_AUTO_ORIENT", "1").strip().casefold()
+    return value not in {"0", "false", "off", "no"}
+
+
+def orient_photo(image: Image.Image) -> tuple[Image.Image, dict[str, Any] | None]:
+    """Rotate a sideways page upright; never blocks an upload when unsure."""
+    if not auto_orientation_enabled():
+        return image, None
+    return image_orientation.apply_upright_rotation(image)
+
+
 def rectify_image(image: Image.Image, corners: list[tuple[float, float]] | None) -> tuple[Image.Image, dict[str, Any]]:
     if corners is None:
         return image, {"type": "exif_transpose_and_resize", "version": 1}
@@ -5013,7 +5076,17 @@ def _save_photo_bytes_with_decode_slot(
         if usage.free < max(MIN_FREE_SPACE_RESERVE, required_bytes * 2) + MIN_FREE_SPACE_RESERVE:
             raise ValueError("便携磁盘剩余空间不足，已拒绝解码照片")
         image, original_size = decode_image_for_processing(raw, media_type)
+        orientation = None
+        if image_role == "source_page" and normalized_corners is None:
+            image, orientation = orient_photo(image)
         image, transform = rectify_image(image, normalized_corners)
+        if orientation is not None:
+            transform = {
+                "type": "auto_orient_and_resize",
+                "version": 2,
+                "orientation": orientation,
+                "rectify": transform,
+            }
         if image_role == "source_page":
             quality = assess_photo_quality(image)
         else:
@@ -5894,6 +5967,29 @@ def classify_model_error(error: BaseException) -> dict[str, Any]:
 RETRY_BACKOFF_SECONDS = (0, 5, 15, 30, 60)
 
 
+def result_scoring_invalid_questions(result: dict[str, Any] | None) -> list[str]:
+    """Return sub-question ids whose grounded scoring result failed validation."""
+    if not isinstance(result, dict):
+        return []
+    found: list[str] = []
+
+    def collect(points: Any) -> None:
+        for point in points or []:
+            if not isinstance(point, dict) or point.get("answer_status") != "scoring_invalid":
+                continue
+            question_id = str(point.get("sub_question_id") or "").strip()
+            if question_id and question_id not in found:
+                found.append(question_id)
+
+    collect(result.get("sub_questions"))
+    dual = result.get("dual_review")
+    if isinstance(dual, dict):
+        for side_result in (dual.get("results") or {}).values():
+            if isinstance(side_result, dict):
+                collect(side_result.get("sub_questions"))
+    return found
+
+
 def manual_retry_policy(
     result: dict[str, Any], state: str, has_photos: bool = True
 ) -> tuple[bool, str]:
@@ -5901,6 +5997,12 @@ def manual_retry_policy(
     if not has_photos:
         return False, "照片缓存已清理，请重新提交照片"
     mode = str(result.get("mode") or "")
+    invalid_questions = result_scoring_invalid_questions(result)
+    if state == "completed" and invalid_questions:
+        return True, (
+            "该份包含评分校验未通过的题（" + "、".join(invalid_questions)
+            + "），可重新调用模型；已确认的成绩不会被自动更改，重新评分会产生模型费用"
+        )
     if mode == 'rules-demo' or (mode == 'vision-model-error' and (result.get('diagnostics') or {}).get('error_category') == 'model_not_configured'):
         return True, '该份未进入真实模型评分；请先配置模型，再核对外发图与费用后原位恢复'
     if state == "recovery_pending" and mode == "queued":
@@ -7732,6 +7834,13 @@ def grade_submission_dual(
                     "model_id": configs[side]["model"],
                     "latency_ms": side_diagnostics[side].get("latency_ms"),
                 })
+                finish_reason = side_diagnostics[side].get("finish_reason")
+                if finish_reason:
+                    error["finish_reason"] = str(finish_reason)[:40]
+                if str(finish_reason or "") == "length":
+                    # 思考型模型可能把 max_completion_tokens 全部用于 reasoning，
+                    # 最终 content 为空；这里给出可操作的说明，避免只看到“不可识别”。
+                    error["message"] = "模型输出达到长度上限被截断（可能被思考内容占满），未返回可识别的批改结果"
                 errors[side] = error
 
     for side, diagnostics in side_diagnostics.items():
@@ -7879,7 +7988,10 @@ def prepare_ai_preview_image_bytes(raw: bytes, media_type: str, redactions: Any,
     """Create the exact stored-page/model image from already-decoded upload bytes."""
     with IMAGE_DECODE_SEMAPHORE:
         image, _ = decode_image_for_processing(raw, media_type)
-        image, _ = rectify_image(image, normalize_photo_corners(corners))
+        normalized_corners = normalize_photo_corners(corners)
+        if normalized_corners is None:
+            image, _orientation = orient_photo(image)
+        image, _ = rectify_image(image, normalized_corners)
         scale = min(1.0, MAX_IMAGE_EDGE / max(image.width, image.height))
         if scale < 1:
             image = image.resize(
@@ -9690,6 +9802,8 @@ class AppHandler(BaseHTTPRequestHandler):
                     WHERE (submissions.state = 'recovery_pending'
                        OR submissions.state = 'failed'
                        OR (submissions.state = 'completed' AND submissions.uncertain_model_call = 1)
+                       OR (submissions.state = 'completed' AND submissions.confirmed_at IS NULL
+                           AND submissions.result_json LIKE '%"scoring_invalid"%')
                        OR (grading_batches.status = 'paused' AND grading_batches.pause_sequence = submissions.batch_sequence
                            AND submissions.state = 'completed'))
                       AND (? = 0 OR (submissions.source_channel = 'mobile'
@@ -9745,6 +9859,28 @@ class AppHandler(BaseHTTPRequestHandler):
                         item["retryable"] = False
                         item["retry_reason"] = "题号无法可靠对应；请确认跳过后再继续批次"
                         item["recovery_action"] = "skip_unmatched_batch_sequence"
+                        submissions.append(item)
+                    elif (
+                        not mobile_client
+                        and item["state"] == "completed"
+                        and not row["confirmed_at"]
+                        and retryable
+                        and result_scoring_invalid_questions(item["result"])
+                    ):
+                        # Completed but unconfirmed records stopped by a grounded
+                        # validation failure can be rescored in place.
+                        item["assignment_name"] = row["assignment_name"]
+                        item["retryable"] = retryable
+                        item["retry_reason"] = retry_reason
+                        item["recovery_action"] = "rescore_completed_submission"
+                        queue_row = conn.execute(
+                            "SELECT attempt_count, updated_at FROM task_queue WHERE submission_id = ?",
+                            (item["id"],),
+                        ).fetchone()
+                        if queue_row:
+                            item["retry_wait_seconds"] = manual_retry_backoff_seconds(
+                                int(queue_row["attempt_count"] or 0), str(queue_row["updated_at"] or "")
+                            )
                         submissions.append(item)
                 mobile_batches = []
                 if mobile_client:
@@ -12671,6 +12807,16 @@ class AppHandler(BaseHTTPRequestHandler):
         if row["retry_attempt_count"] is None:
             conn.close()
             raise ValueError("任务队列记录不存在，无法安全重试；请重新提交照片")
+        invalid_questions = result_scoring_invalid_questions(result)
+        rescore_marker = isinstance(result, dict) and result.get("rescore_completed") is True
+        rescore_completed = bool(invalid_questions) or rescore_marker
+        if rescore_completed:
+            if row["confirmed_at"]:
+                conn.close()
+                raise ValueError("该份已有确认成绩，不能重新评分；如需改分请走教师复核")
+            if not row["ai_privacy_confirmed"] or row["privacy_status"] not in PRIVACY_STATUS_APPROVED:
+                conn.close()
+                raise ValueError("该份缺少有效隐私确认，不能重新评分")
         wait_seconds = manual_retry_backoff_seconds(
             int(row["retry_attempt_count"] or 0), str(row["queue_updated_at"] or "")
         )
@@ -12678,7 +12824,7 @@ class AppHandler(BaseHTTPRequestHandler):
             conn.close()
             raise ValueError(f"为避免重复请求，请等待约 {wait_seconds} 秒后再重试")
         batch_id = str(row["batch_id"] or "")
-        if batch_id:
+        if batch_id and not rescore_completed:
             batch = conn.execute("SELECT * FROM grading_batches WHERE id = ?", (batch_id,)).fetchone()
             from batch_grading_control import stopped
             if stopped(batch):
@@ -12697,6 +12843,8 @@ class AppHandler(BaseHTTPRequestHandler):
         except (TypeError, ValueError):
             previous_result = {}
         retry_result = {"mode": "queued", "blocked": True, "needs_review": True, "summary": "已重新加入本机批改队列。"}
+        if rescore_completed:
+            retry_result["rescore_completed"] = True
         if isinstance(previous_result, dict) and (previous_result.get("dual_review_requested") is True or isinstance(previous_result.get('dual_review'),dict)):
             retry_result["dual_review_requested"] = True
         if configuration_recovery:
@@ -12710,7 +12858,7 @@ class AppHandler(BaseHTTPRequestHandler):
             "UPDATE task_queue SET state = 'queued', attempt_count = attempt_count + 1, available_at = ?, last_error = '', updated_at = ? WHERE submission_id = ?",
             (now, now, submission_id),
         )
-        if batch_id:
+        if batch_id and not rescore_completed:
             conn.execute(
                 "UPDATE grading_batches SET status = 'active', pause_sequence = NULL, pause_reason = '', updated_at = ? WHERE id = ? AND next_sequence = ?",
                 (now, batch_id, int(row["batch_sequence"])),
@@ -12720,7 +12868,8 @@ class AppHandler(BaseHTTPRequestHandler):
             "submission_retry_requested",
             "submission",
             submission_id,
-            {"previous_mode": result.get("mode"), "retry_reason": retry_reason},
+            {"previous_mode": result.get("mode"), "retry_reason": retry_reason,
+             "recovery_action": "rescore_completed_submission" if rescore_completed else "retry"},
         )
         conn.commit()
         conn.close()
@@ -12787,10 +12936,10 @@ class AppHandler(BaseHTTPRequestHandler):
                 assignment_max = export_scope_maximum(saved_sub_questions, json.loads(assignment["criteria_json"] or "[]"), result)
             except (TypeError, ValueError, json.JSONDecodeError):
                 continue
-            try:
-                ai_total = (float(result["suggested_total"]) if result.get("suggested_total") is not None else None) if total_confirmed else float(result.get("suggested_total"))
-            except (TypeError, ValueError):
-                continue
+            from saved_ai_scores import primary_model_score
+            question_scores, ai_total, ai_state = primary_model_score(result)
+            if ai_state != "complete":
+                ai_total = None
             if (
                 not math.isfinite(final_total)
                 or not math.isfinite(assignment_max)
@@ -12799,31 +12948,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 or (ai_total is not None and (not math.isfinite(ai_total) or not (0 <= ai_total <= assignment_max)))
             ):
                 continue
-            raw_sub_results = result.get("sub_questions", [])
-            if not isinstance(raw_sub_results, list):
-                raw_sub_results = []
-            sub_results = {
-                item.get("sub_question_id"): item
-                for item in raw_sub_results
-                if isinstance(item, dict) and item.get("sub_question_id")
-            }
-            sub_scores = []
-            for sub_question in saved_sub_questions:
-                sub_result = sub_results.get(sub_question["id"], {})
-                try:
-                    sub_total = float(sub_result.get("suggested_total"))
-                    sub_maximum = float(sub_question.get("max_score"))
-                except (TypeError, ValueError):
-                    sub_scores.append("")
-                    continue
-                sub_scores.append(
-                    sub_total
-                    if math.isfinite(sub_total)
-                    and math.isfinite(sub_maximum)
-                    and sub_maximum > 0
-                    and 0 <= sub_total <= sub_maximum
-                    else ""
-                )
+            sub_scores = [question_scores.get(q["id"], "") for q in saved_sub_questions]
 
             def csv_text(value: Any) -> str:
                 text = str(value or "")
@@ -12924,10 +13049,13 @@ class AppHandler(BaseHTTPRequestHandler):
                 continue
             try:
                 final_total = float(row["final_total"])
-                ai_total = (float(result["suggested_total"]) if result.get("suggested_total") is not None else None) if total_confirmed else float(result.get("suggested_total"))
                 maximum = export_scope_maximum(saved_sub_questions, json.loads(assignment["criteria_json"] or "[]"), result)
             except (TypeError, ValueError, json.JSONDecodeError):
                 continue
+            from saved_ai_scores import primary_model_score
+            question_scores, ai_total, ai_state = primary_model_score(result)
+            if ai_state != "complete":
+                ai_total = None
             if (
                 not all(math.isfinite(value) for value in (final_total, maximum))
                 or (ai_total is not None and not math.isfinite(ai_total))
@@ -12937,31 +13065,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 or not row["anonymous_code"]
             ):
                 continue
-            raw_sub_results = result.get("sub_questions", [])
-            if not isinstance(raw_sub_results, list):
-                raw_sub_results = []
-            sub_results = {
-                item.get("sub_question_id"): item
-                for item in raw_sub_results
-                if isinstance(item, dict) and item.get("sub_question_id")
-            }
-            sub_scores = []
-            for sub_question in saved_sub_questions:
-                sub_result = sub_results.get(sub_question["id"], {})
-                try:
-                    score = float(sub_result.get("suggested_total"))
-                    sub_maximum = float(sub_question.get("max_score"))
-                except (TypeError, ValueError):
-                    sub_scores.append("")
-                    continue
-                sub_scores.append(
-                    score
-                    if math.isfinite(score)
-                    and math.isfinite(sub_maximum)
-                    and sub_maximum > 0
-                    and 0 <= score <= sub_maximum
-                    else ""
-                )
+            sub_scores = [question_scores.get(q["id"], "") for q in saved_sub_questions]
+
             writer.writerow([row["anonymous_code"], final_total, ai_total, maximum, *sub_scores, "批量采纳 AI 共识（未逐点评阅）" if result.get("confirmation_method") == "teacher_batch_adoption" else "教师总分终评（未逐点确认）" if result.get("confirmation_method")=="teacher_total_confirmation" else "双模型明确空白，自动0分" if result.get("confirmation_method")=="automatic_blank_zero" else "教师终评"])
 
         body = ("\ufeff" + output.getvalue()).encode("utf-8")
